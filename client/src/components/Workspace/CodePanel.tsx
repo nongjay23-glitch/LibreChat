@@ -66,6 +66,11 @@ type WorkspaceCheckpointsResponse = {
   checkpoints: WorkspaceCheckpoint[];
 };
 
+type CheckpointCleanupResponse = {
+  keep: number;
+  deleted: string[];
+};
+
 type DiffFileSummary = {
   path: string;
   added: number;
@@ -89,7 +94,8 @@ const getRequestErrorMessage = (err: unknown, fallback: string) => {
   return fallback;
 };
 
-const formatCheckpointId = (checkpointId: string) => checkpointId.replace('T', ' ').replace(/-\d{3}Z$/, 'Z');
+const formatCheckpointId = (checkpointId: string) =>
+  checkpointId.replace('T', ' ').replace(/-\d{3}Z$/, 'Z');
 
 const getDiffPath = (rawPath: string) =>
   rawPath
@@ -218,12 +224,17 @@ export default function CodePanel() {
     'idle',
   );
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  const [isApplyConfirmVisible, setIsApplyConfirmVisible] = useState(false);
   const [checkpoints, setCheckpoints] = useState<WorkspaceCheckpoint[]>([]);
   const [isLoadingCheckpoints, setIsLoadingCheckpoints] = useState(false);
   const [restoreState, setRestoreState] = useState<'idle' | 'restoring' | 'restored' | 'failed'>(
     'idle',
   );
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
+  const [checkpointActionState, setCheckpointActionState] = useState<
+    'idle' | 'cleaning' | 'deleting' | 'done' | 'failed'
+  >('idle');
+  const [checkpointActionMessage, setCheckpointActionMessage] = useState<string | null>(null);
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(0));
   const conversationId = useRecoilValue(store.conversationIdByIndex(0)) ?? Constants.NEW_CONVO;
   const setPendingCodeContext = useSetRecoilState(
@@ -247,6 +258,18 @@ export default function CodePanel() {
     [selectedContextFiles],
   );
   const patchPreview = useMemo(() => parseUnifiedDiff(patchText), [patchText]);
+  const patchTotals = useMemo(
+    () =>
+      patchPreview.files.reduce(
+        (totals, file) => ({
+          added: totals.added + file.added,
+          removed: totals.removed + file.removed,
+          hunks: totals.hunks + file.hunks,
+        }),
+        { added: 0, removed: 0, hunks: 0 },
+      ),
+    [patchPreview.files],
+  );
   const canApplyPatch =
     Boolean(status?.canApplyPatches) &&
     patchText.trim().length > 0 &&
@@ -307,6 +330,7 @@ export default function CodePanel() {
     setPatchText(pendingWorkspacePatch);
     setApplyState('idle');
     setApplyMessage(null);
+    setIsApplyConfirmVisible(false);
     setPendingWorkspacePatch(null);
   }, [pendingWorkspacePatch, setPendingWorkspacePatch]);
 
@@ -417,8 +441,15 @@ export default function CodePanel() {
       return;
     }
 
+    if (!isApplyConfirmVisible) {
+      setIsApplyConfirmVisible(true);
+      setApplyMessage(null);
+      return;
+    }
+
     setApplyState('applying');
     setApplyMessage(null);
+    setIsApplyConfirmVisible(false);
     try {
       const data = (await request.post('/api/workspace/apply-patch', {
         patch: patchText,
@@ -437,6 +468,44 @@ export default function CodePanel() {
     } catch (err) {
       setApplyState('failed');
       setApplyMessage(getRequestErrorMessage(err, 'Apply patch failed'));
+    }
+  };
+
+  const cleanupCheckpoints = async () => {
+    if (checkpointActionState === 'cleaning') {
+      return;
+    }
+
+    setCheckpointActionState('cleaning');
+    setCheckpointActionMessage(null);
+    try {
+      const data = (await request.post('/api/workspace/checkpoints/cleanup', {
+        keep: 5,
+      })) as CheckpointCleanupResponse;
+      setCheckpointActionState('done');
+      setCheckpointActionMessage(`Kept latest ${data.keep}, deleted ${data.deleted.length} checkpoints.`);
+      await loadCheckpoints();
+    } catch (err) {
+      setCheckpointActionState('failed');
+      setCheckpointActionMessage(getRequestErrorMessage(err, 'Checkpoint cleanup failed'));
+    }
+  };
+
+  const deleteCheckpoint = async (checkpointId: string) => {
+    if (checkpointActionState === 'deleting') {
+      return;
+    }
+
+    setCheckpointActionState('deleting');
+    setCheckpointActionMessage(null);
+    try {
+      await request.delete(`/api/workspace/checkpoints/${encodeURIComponent(checkpointId)}`);
+      setCheckpointActionState('done');
+      setCheckpointActionMessage('Deleted checkpoint.');
+      await loadCheckpoints();
+    } catch (err) {
+      setCheckpointActionState('failed');
+      setCheckpointActionMessage(getRequestErrorMessage(err, 'Delete checkpoint failed'));
     }
   };
 
@@ -705,6 +774,7 @@ export default function CodePanel() {
             setPatchText(event.target.value);
             setApplyState('idle');
             setApplyMessage(null);
+            setIsApplyConfirmVisible(false);
           }}
           placeholder="Paste unified diff/patch here"
           spellCheck={false}
@@ -769,13 +839,14 @@ export default function CodePanel() {
             <button
               type="button"
               className="rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={patchText.length === 0}
-              onClick={() => {
-                setPatchText('');
-                setApplyState('idle');
-                setApplyMessage(null);
-              }}
-            >
+                  disabled={patchText.length === 0}
+                  onClick={() => {
+                    setPatchText('');
+                    setApplyState('idle');
+                    setApplyMessage(null);
+                    setIsApplyConfirmVisible(false);
+                  }}
+                >
               Clear diff
             </button>
             <button
@@ -793,9 +864,58 @@ export default function CodePanel() {
                 ? 'Applying...'
                 : applyState === 'applied'
                   ? 'Applied'
-                  : 'Apply changes'}
+                  : isApplyConfirmVisible
+                    ? 'Review ready'
+                    : 'Review apply'}
             </button>
           </div>
+
+          {isApplyConfirmVisible && (
+            <div className="rounded-md border border-orange-500/40 bg-orange-500/10 p-3 text-xs leading-5 text-text-primary">
+              <div className="mb-2 font-medium">Apply confirmation</div>
+              <div className="text-text-secondary">
+                ตรวจอีกครั้งก่อนเขียนไฟล์จริง ระบบจะสร้าง checkpoint ก่อน apply เสมอ
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="rounded-md border border-border-light p-2">
+                  <div className="text-text-secondary">Files</div>
+                  <div className="mt-1 font-semibold">{patchPreview.files.length}</div>
+                </div>
+                <div className="rounded-md border border-border-light p-2">
+                  <div className="text-text-secondary">Add</div>
+                  <div className="mt-1 font-semibold text-green-500">+{patchTotals.added}</div>
+                </div>
+                <div className="rounded-md border border-border-light p-2">
+                  <div className="text-text-secondary">Remove</div>
+                  <div className="mt-1 font-semibold text-red-500">-{patchTotals.removed}</div>
+                </div>
+              </div>
+              <div className="mt-3 max-h-24 space-y-1 overflow-y-auto">
+                {patchPreview.files.map((file) => (
+                  <div key={file.path} className="truncate text-text-secondary">
+                    {file.path} · {file.hunks} hunks
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-border-light px-3 py-2 font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                  onClick={() => setIsApplyConfirmVisible(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md bg-orange-500 px-3 py-2 font-medium text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={applyState === 'applying'}
+                  onClick={applyPatch}
+                >
+                  Confirm apply
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -822,6 +942,27 @@ export default function CodePanel() {
           </div>
         )}
 
+        {checkpointActionMessage != null && (
+          <div
+            className={`mb-3 rounded-md border p-2 text-xs leading-5 ${
+              checkpointActionState === 'failed'
+                ? 'border-red-500/30 bg-red-500/10 text-red-500'
+                : 'border-green-500/30 bg-green-500/10 text-green-500'
+            }`}
+          >
+            {checkpointActionMessage}
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="mb-3 w-full rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-hover hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={checkpoints.length <= 5 || checkpointActionState === 'cleaning'}
+          onClick={cleanupCheckpoints}
+        >
+          {checkpointActionState === 'cleaning' ? 'Cleaning...' : 'Keep latest 5 checkpoints'}
+        </button>
+
         {isLoadingCheckpoints ? (
           <div className="rounded-md bg-black/20 p-3 text-xs text-text-secondary">
             Loading checkpoints...
@@ -843,15 +984,26 @@ export default function CodePanel() {
                       {checkpoint.createdFiles?.length ?? 0}
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    className="flex shrink-0 items-center gap-1 rounded-md border border-orange-500/50 px-2 py-1 font-medium text-orange-500 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-border-light disabled:text-text-secondary disabled:opacity-60"
-                    disabled={!status?.canRestoreCheckpoints || restoreState === 'restoring'}
-                    onClick={() => restoreCheckpoint(checkpoint.checkpointId)}
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                    {restoreState === 'restoring' ? 'Restoring...' : 'Restore'}
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 rounded-md border border-orange-500/50 px-2 py-1 font-medium text-orange-500 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-border-light disabled:text-text-secondary disabled:opacity-60"
+                      disabled={!status?.canRestoreCheckpoints || restoreState === 'restoring'}
+                      onClick={() => restoreCheckpoint(checkpoint.checkpointId)}
+                    >
+                      <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                      {restoreState === 'restoring' ? 'Restoring...' : 'Restore'}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-md border border-border-light p-1.5 text-text-secondary hover:bg-surface-hover hover:text-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={checkpointActionState === 'deleting'}
+                      onClick={() => deleteCheckpoint(checkpoint.checkpointId)}
+                      aria-label={`Delete checkpoint ${checkpoint.checkpointId}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1 text-text-secondary">
                   {[...checkpoint.savedFiles, ...(checkpoint.createdFiles ?? [])]

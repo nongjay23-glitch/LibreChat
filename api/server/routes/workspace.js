@@ -13,6 +13,8 @@ const MAX_LIST_ITEMS = 250;
 const MAX_READ_BYTES = 200 * 1024;
 const MAX_PATCH_BYTES = 512 * 1024;
 const MAX_PATCH_FILES = 20;
+const DEFAULT_CHECKPOINT_KEEP = 5;
+const MAX_CHECKPOINT_KEEP = 50;
 const CHECKPOINT_DIR = '.workspace-checkpoints';
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_READONLY_ROOT || '/readonly-workspace');
 const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
@@ -253,7 +255,7 @@ async function readCheckpointManifest(checkpointId) {
   };
 }
 
-async function listCheckpointManifests() {
+async function listCheckpointManifests(limit = 20) {
   if (!WORKSPACE_WRITE_ROOT) {
     return [];
   }
@@ -274,7 +276,8 @@ async function listCheckpointManifests() {
     }
   }
 
-  return checkpoints.sort((a, b) => b.checkpointId.localeCompare(a.checkpointId)).slice(0, 20);
+  const sorted = checkpoints.sort((a, b) => b.checkpointId.localeCompare(a.checkpointId));
+  return Number.isInteger(limit) ? sorted.slice(0, limit) : sorted;
 }
 
 function validateRestorablePath(file) {
@@ -283,6 +286,12 @@ function validateRestorablePath(file) {
     throw new Error(`Blocked restore path: ${normalized}`);
   }
   return { normalized, resolved };
+}
+
+async function deleteCheckpoint(checkpointId) {
+  const checkpointRoot = resolveCheckpointPath(checkpointId);
+  await fs.rm(checkpointRoot, { recursive: true, force: true });
+  return checkpointId;
 }
 
 router.get('/status', async (_req, res) => {
@@ -315,6 +324,45 @@ router.get('/checkpoints', async (_req, res, next) => {
     return res.json({ checkpoints });
   } catch (error) {
     return next(error);
+  }
+});
+
+router.post('/checkpoints/cleanup', async (req, res) => {
+  try {
+    if (!WORKSPACE_WRITE_ROOT) {
+      return res.status(403).json({ message: 'Workspace write root is not configured.' });
+    }
+
+    const requestedKeep = Number(req.body?.keep ?? DEFAULT_CHECKPOINT_KEEP);
+    const keep = Math.min(
+      MAX_CHECKPOINT_KEEP,
+      Math.max(1, Number.isFinite(requestedKeep) ? Math.floor(requestedKeep) : DEFAULT_CHECKPOINT_KEEP),
+    );
+    const checkpoints = await listCheckpointManifests(null);
+    const deleted = [];
+
+    for (const checkpoint of checkpoints.slice(keep)) {
+      deleted.push(await deleteCheckpoint(checkpoint.checkpointId));
+    }
+
+    return res.json({ keep, deleted });
+  } catch (error) {
+    const message = error?.message || 'Checkpoint cleanup failed.';
+    return res.status(400).json({ message: message.trim() });
+  }
+});
+
+router.delete('/checkpoints/:checkpointId', async (req, res) => {
+  try {
+    if (!WORKSPACE_WRITE_ROOT) {
+      return res.status(403).json({ message: 'Workspace write root is not configured.' });
+    }
+
+    const checkpointId = await deleteCheckpoint(req.params.checkpointId);
+    return res.json({ deleted: true, checkpointId });
+  } catch (error) {
+    const message = error?.message || 'Delete checkpoint failed.';
+    return res.status(400).json({ message: message.trim() });
   }
 });
 
