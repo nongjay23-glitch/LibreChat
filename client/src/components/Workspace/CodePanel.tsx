@@ -353,6 +353,7 @@ export default function CodePanel() {
       return;
     }
     setPatchText(pendingWorkspacePatch);
+    setActiveCodeSection('changes');
     setApplyState('idle');
     setApplyMessage(null);
     setIsApplyConfirmVisible(false);

@@ -8,6 +8,7 @@ import CopyButton from '~/components/Messages/Content/CopyButton';
 import LangIcon from '~/components/Messages/Content/LangIcon';
 import RunCode from '~/components/Messages/Content/RunCode';
 import { useLocalize } from '~/hooks';
+import { setActivePanelFromOutside } from '~/Providers';
 import store from '~/store';
 
 const isPatchLanguage = (lang: string) => ['diff', 'patch'].includes(lang.toLowerCase());
@@ -17,6 +18,7 @@ const CodeBar: React.FC<CodeBarProps> = React.memo(
     const localize = useLocalize();
     const { isCopied, handleCopy } = useCopyCode(codeRef);
     const setPendingWorkspacePatch = useSetRecoilState(store.pendingWorkspacePatchByIndex(0));
+    const setSidebarExpanded = useSetRecoilState(store.sidebarExpanded);
 
     const sendPatchToCode = () => {
       const patchText = codeRef.current?.textContent ?? '';
@@ -24,6 +26,8 @@ const CodeBar: React.FC<CodeBarProps> = React.memo(
         return;
       }
       setPendingWorkspacePatch(patchText);
+      setActivePanelFromOutside('code-workspace');
+      setSidebarExpanded(true);
     };
 
     return (
@@ -41,12 +45,12 @@ const CodeBar: React.FC<CodeBarProps> = React.memo(
             )}
             {error !== true && isPatchLanguage(lang) && (
               <TooltipAnchor
-                description="Send diff to Code"
+                description="Review in Code"
                 render={
                   <button
                     type="button"
                     onClick={sendPatchToCode}
-                    aria-label="Send diff to Code"
+                    aria-label="Review diff in Code"
                     className="inline-flex select-none items-center justify-center rounded-lg p-1.5 text-text-secondary transition-all duration-200 ease-out hover:bg-surface-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-border-heavy"
                   >
                     <Code2 size={18} aria-hidden="true" />

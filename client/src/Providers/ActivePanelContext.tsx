@@ -1,7 +1,13 @@
-import { createContext, useCallback, useContext, useMemo, useState, ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 
 const STORAGE_KEY = 'side:active-panel';
+const ACTIVE_PANEL_EVENT = 'librechat:set-active-panel';
 export const DEFAULT_PANEL = 'conversations';
+
+export function setActivePanelFromOutside(id: string) {
+  localStorage.setItem(STORAGE_KEY, id);
+  window.dispatchEvent(new CustomEvent<string>(ACTIVE_PANEL_EVENT, { detail: id }));
+}
 
 function getInitialActivePanel(): string {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -21,6 +27,18 @@ export function ActivePanelProvider({ children }: { children: ReactNode }) {
   const setActive = useCallback((id: string) => {
     localStorage.setItem(STORAGE_KEY, id);
     _setActive(id);
+  }, []);
+
+  useEffect(() => {
+    const handleExternalActivePanel = (event: Event) => {
+      const id = (event as CustomEvent<string>).detail;
+      if (typeof id === 'string' && id.length > 0) {
+        _setActive(id);
+      }
+    };
+
+    window.addEventListener(ACTIVE_PANEL_EVENT, handleExternalActivePanel);
+    return () => window.removeEventListener(ACTIVE_PANEL_EVENT, handleExternalActivePanel);
   }, []);
 
   const value = useMemo(() => ({ active, setActive }), [active, setActive]);
