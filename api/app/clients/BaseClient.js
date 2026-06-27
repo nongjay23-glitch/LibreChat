@@ -149,6 +149,8 @@ const formatCodeContextAsMarkdown = (codeContext) => {
   return [
     'Project code context attached by the user.',
     'Treat these files as read-only reference context unless the user explicitly asks for changes.',
+    'If the user asks you to modify, create, or refactor project files, respond with a unified diff in a fenced ```diff code block so the user can send it to Code mode for review and apply.',
+    'Do not claim that files were changed directly. Do not ask the user to edit files manually when a unified diff can express the change.',
     '',
     fileBlocks,
   ].join('\n');
