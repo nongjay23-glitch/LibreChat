@@ -52,6 +52,122 @@ type WorkspaceFileResponse = {
   content: string;
 };
 
+type DiffFileSummary = {
+  path: string;
+  added: number;
+  removed: number;
+  hunks: number;
+  warnings: string[];
+};
+
+const getDiffPath = (rawPath: string) =>
+  rawPath
+    .trim()
+    .replace(/^"|"$/g, '')
+    .replace(/^[ab]\//, '');
+
+const getDiffPathWarnings = (path: string) => {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  const warnings: string[] = [];
+
+  if (path.startsWith('/') || /^[a-z]:/i.test(path) || normalized.includes('../')) {
+    warnings.push('path ออกนอก workspace');
+  }
+
+  if (
+    normalized === '.env' ||
+    normalized.includes('/.env') ||
+    normalized.includes('token') ||
+    normalized.includes('password') ||
+    normalized.includes('secret') ||
+    normalized.includes('credential')
+  ) {
+    warnings.push('ไฟล์ลับหรือชื่อไฟล์เสี่ยง');
+  }
+
+  if (
+    normalized.startsWith('.git/') ||
+    normalized.includes('/.git/') ||
+    normalized.startsWith('node_modules/') ||
+    normalized.includes('/node_modules/') ||
+    normalized.startsWith('logs/') ||
+    normalized.startsWith('uploads/')
+  ) {
+    warnings.push('โฟลเดอร์นี้ถูกบล็อก');
+  }
+
+  return warnings;
+};
+
+const parseUnifiedDiff = (patchText: string) => {
+  const files: DiffFileSummary[] = [];
+  const warnings: string[] = [];
+  const lines = patchText.split(/\r?\n/);
+  let current: DiffFileSummary | null = null;
+
+  const ensureFile = (path: string) => {
+    const normalizedPath = getDiffPath(path);
+    if (!normalizedPath || normalizedPath === '/dev/null') {
+      return null;
+    }
+    let file = files.find((item) => item.path === normalizedPath);
+    if (!file) {
+      file = {
+        path: normalizedPath,
+        added: 0,
+        removed: 0,
+        hunks: 0,
+        warnings: getDiffPathWarnings(normalizedPath),
+      };
+      files.push(file);
+    }
+    return file;
+  };
+
+  for (const line of lines) {
+    if (line.startsWith('diff --git ')) {
+      const parts = line.split(/\s+/);
+      current = ensureFile(parts[3] ?? parts[2] ?? '');
+      continue;
+    }
+
+    if (line.startsWith('+++ ')) {
+      const path = line.slice(4);
+      if (!path.includes('/dev/null')) {
+        current = ensureFile(path);
+      }
+      continue;
+    }
+
+    if (line.startsWith('@@')) {
+      if (current) {
+        current.hunks += 1;
+      }
+      continue;
+    }
+
+    if (!current || line.startsWith('+++') || line.startsWith('---')) {
+      continue;
+    }
+
+    if (line.startsWith('+')) {
+      current.added += 1;
+    } else if (line.startsWith('-')) {
+      current.removed += 1;
+    }
+  }
+
+  if (patchText.trim().length > 0 && files.length === 0) {
+    warnings.push('ยังอ่านไฟล์จาก diff ไม่ได้ ตรวจว่าเป็น unified diff หรือไม่');
+  }
+
+  return {
+    files,
+    warnings,
+    hasWarnings: warnings.length > 0 || files.some((file) => file.warnings.length > 0),
+  };
+};
+
 export default function CodePanel() {
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [currentPath, setCurrentPath] = useState('');
@@ -66,6 +182,7 @@ export default function CodePanel() {
   const [contextState, setContextState] = useState<
     'idle' | 'added' | 'limit' | 'attached' | 'copied'
   >('idle');
+  const [patchText, setPatchText] = useState('');
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(0));
   const conversationId = useRecoilValue(store.conversationIdByIndex(0)) ?? Constants.NEW_CONVO;
   const setPendingCodeContext = useSetRecoilState(
@@ -85,6 +202,7 @@ export default function CodePanel() {
     () => new Set(selectedContextFiles.map((file) => file.path)),
     [selectedContextFiles],
   );
+  const patchPreview = useMemo(() => parseUnifiedDiff(patchText), [patchText]);
 
   const loadStatus = useCallback(async () => {
     const data = (await request.get('/api/workspace/status')) as WorkspaceStatus;
@@ -341,6 +459,16 @@ export default function CodePanel() {
             <ListPlus className="h-4 w-4" aria-hidden="true" />
             {selectedFile != null && selectedPaths.has(selectedFile.path) ? 'Added to context' : 'Add to Context'}
           </button>
+          {selectedContextFiles.length > 0 && (
+            <button
+              type="button"
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-green-500/40 px-3 py-2 text-xs font-medium text-green-500 hover:bg-green-500/10"
+              onClick={sendSelectedContextToChat}
+            >
+              <Send className="h-4 w-4" aria-hidden="true" />
+              Attach selected files ({selectedContextFiles.length})
+            </button>
+          )}
           <button
             type="button"
             className="flex w-full items-center justify-center gap-2 rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -424,6 +552,89 @@ export default function CodePanel() {
               onClick={clearSelectedContext}
             >
               Clear
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-border-light p-3">
+        <div className="mb-3">
+          <div className="flex items-center gap-2 font-medium text-text-primary">
+            <Code2 className="h-4 w-4 text-orange-500" aria-hidden="true" />
+            Proposed changes
+          </div>
+          <div className="mt-1 text-xs leading-5 text-text-secondary">
+            วาง unified diff/patch จาก AI เพื่อ preview ก่อน รอบนี้ยังไม่เขียนไฟล์จริง
+          </div>
+        </div>
+
+        <textarea
+          className="min-h-40 w-full resize-y rounded-md border border-border-light bg-black/20 p-3 font-mono text-xs leading-5 text-text-primary outline-none focus:border-orange-500"
+          value={patchText}
+          onChange={(event) => setPatchText(event.target.value)}
+          placeholder={`diff --git a/client/src/example.tsx b/client/src/example.tsx\n--- a/client/src/example.tsx\n+++ b/client/src/example.tsx\n@@ -1,3 +1,3 @@\n-old line\n+new line`}
+          spellCheck={false}
+        />
+
+        <div className="mt-3 space-y-2">
+          {patchPreview.warnings.map((warning) => (
+            <div
+              key={warning}
+              className="rounded-md border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs leading-5 text-yellow-500"
+            >
+              {warning}
+            </div>
+          ))}
+
+          {patchText.trim().length === 0 ? (
+            <div className="rounded-md bg-black/20 p-3 text-xs text-text-secondary">
+              ยังไม่มี diff ให้ preview
+            </div>
+          ) : patchPreview.files.length > 0 ? (
+            <div className="space-y-1">
+              {patchPreview.files.map((file) => (
+                <div
+                  key={file.path}
+                  className="rounded-md border border-border-light px-3 py-2 text-xs"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-medium text-text-primary">
+                      {file.path}
+                    </span>
+                    <span className="shrink-0 text-text-secondary">
+                      +{file.added} / -{file.removed} · {file.hunks} hunks
+                    </span>
+                  </div>
+                  {file.warnings.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {file.warnings.map((warning) => (
+                        <div key={warning} className="text-yellow-500">
+                          {warning}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={patchText.length === 0}
+              onClick={() => setPatchText('')}
+            >
+              Clear diff
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary opacity-60"
+              disabled
+              title="Apply จะเปิดหลังเพิ่ม backend write safety และ checkpoint อัตโนมัติ"
+            >
+              Apply changes locked
             </button>
           </div>
         </div>
