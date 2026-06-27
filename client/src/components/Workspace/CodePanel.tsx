@@ -259,6 +259,7 @@ export default function CodePanel() {
   const [checkpointActionMessage, setCheckpointActionMessage] = useState<string | null>(null);
   const [activities, setActivities] = useState<WorkspaceActivity[]>([]);
   const [isLoadingActivity, setIsLoadingActivity] = useState(false);
+  const [isSelectedContextOpen, setIsSelectedContextOpen] = useState(false);
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(0));
   const conversationId = useRecoilValue(store.conversationIdByIndex(0)) ?? Constants.NEW_CONVO;
   const setPendingCodeContext = useSetRecoilState(
@@ -442,6 +443,7 @@ export default function CodePanel() {
 
     setSelectedContextFiles(nextFiles);
     setContextState('added');
+    setIsSelectedContextOpen(true);
   };
 
   const removeContextFile = (path: string) => {
@@ -452,12 +454,14 @@ export default function CodePanel() {
   const clearSelectedContext = () => {
     setSelectedContextFiles([]);
     setContextState('idle');
+    setIsSelectedContextOpen(false);
   };
 
   const sendSelectedContextToChat = () => {
     if (selectedContextFiles.length === 0) {
       return;
     }
+    setIsSelectedContextOpen(true);
     attachFilesToChat(selectedContextFiles);
   };
 
@@ -579,9 +583,15 @@ export default function CodePanel() {
   return (
     <section className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-4 py-4 text-sm">
       <div>
-        <div className="mb-2 flex items-center gap-2 text-text-primary">
-          <Code2 className="h-5 w-5 text-orange-500" aria-hidden="true" />
-          <h2 className="text-base font-semibold">Code</h2>
+        <div className="flex items-center justify-between gap-3 text-text-primary">
+          <div className="flex min-w-0 items-center gap-2">
+            <Code2 className="h-5 w-5 shrink-0 text-orange-500" aria-hidden="true" />
+            <h2 className="truncate text-base font-semibold">Code</h2>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5 rounded-md border border-green-500/20 bg-green-500/5 px-2 py-1 text-[11px] text-text-secondary">
+            <ShieldCheck className="h-3.5 w-3.5 text-green-500" aria-hidden="true" />
+            Safe writes
+          </div>
         </div>
         <p className="hidden">
           โหมดนี้เปิดให้ดูไฟล์โปรเจกต์แบบ read-only เพื่อเลือก context ไปคุยกับ AI
@@ -606,11 +616,6 @@ export default function CodePanel() {
             </button>
           ))}
         </div>
-      </div>
-
-      <div className="flex items-center gap-2 rounded-md border border-green-500/20 bg-green-500/5 px-3 py-2 text-xs text-text-secondary">
-        <ShieldCheck className="h-4 w-4 shrink-0 text-green-500" aria-hidden="true" />
-        <span>Read-only workspace, protected paths, diff review before writes.</span>
       </div>
 
       {false && (
@@ -754,13 +759,24 @@ export default function CodePanel() {
       </div>
 
       <div className="rounded-lg border border-border-light p-3">
-        <div className="mb-3">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 text-left"
+          onClick={() => setIsSelectedContextOpen((isOpen) => !isOpen)}
+          aria-expanded={isSelectedContextOpen}
+        >
           <div className="font-medium text-text-primary">Selected context</div>
           <div className="text-xs leading-5 text-text-secondary">
             {selectedContextFiles.length} files · {formatBytes(selectedContextBytes)} /{' '}
             {formatBytes(MAX_CODE_CONTEXT_BYTES)}
           </div>
-        </div>
+          <ChevronRight
+            className={`h-4 w-4 shrink-0 text-text-secondary transition-transform ${
+              isSelectedContextOpen ? 'rotate-90' : ''
+            }`}
+            aria-hidden="true"
+          />
+        </button>
 
         {contextState === 'limit' && (
           <div className="mb-3 rounded-md border border-red-500/30 bg-red-500/10 p-2 text-xs leading-5 text-red-500">
@@ -768,6 +784,8 @@ export default function CodePanel() {
           </div>
         )}
 
+        {isSelectedContextOpen && (
+          <>
         {selectedContextFiles.length > 0 ? (
           <div className="mb-3 max-h-40 space-y-1 overflow-y-auto">
             {selectedContextFiles.map((file) => (
@@ -823,6 +841,8 @@ export default function CodePanel() {
             </button>
           </div>
         </div>
+          </>
+        )}
       </div>
 
         </>
