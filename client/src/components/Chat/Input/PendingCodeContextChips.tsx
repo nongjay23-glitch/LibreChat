@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import * as Ariakit from '@ariakit/react';
 import { FileCode2, FileText, X } from 'lucide-react';
 import { useRecoilValue, useSetRecoilState } from 'recoil';
-import { formatBytes } from '~/common';
+import { formatBytes, getTextBytes } from '~/common';
 import store from '~/store';
 
 function PendingCodeContextChips({ conversationId }: { conversationId: string }) {
@@ -21,6 +21,19 @@ function PendingCodeContextChips({ conversationId }: { conversationId: string })
     }
     return codeContext.files.find((file) => file.path === activePath) ?? codeContext.files[0];
   }, [activePath, codeContext]);
+  const totalBytes = useMemo(() => {
+    if (!codeContext) {
+      return 0;
+    }
+    if (Number.isFinite(codeContext.totalBytes)) {
+      return codeContext.totalBytes;
+    }
+    return codeContext.files.reduce(
+      (total, file) =>
+        total + (Number.isFinite(file.size) ? file.size : getTextBytes(file.content)),
+      0,
+    );
+  }, [codeContext]);
 
   const clear = useCallback(() => {
     setCodeContext(null);
@@ -49,7 +62,7 @@ function PendingCodeContextChips({ conversationId }: { conversationId: string })
         >
           <FileCode2 className="h-4 w-4 shrink-0 text-orange-500" aria-hidden="true" />
           <span className="truncate">
-            Code context · {codeContext.files.length} files · {formatBytes(codeContext.totalBytes)}
+            Code context · {codeContext.files.length} files · {formatBytes(totalBytes)}
           </span>
         </Ariakit.PopoverDisclosure>
         <button
@@ -91,7 +104,9 @@ function PendingCodeContextChips({ conversationId }: { conversationId: string })
                 <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{file.path}</span>
-                  <span className="block text-[11px]">{formatBytes(file.size)}</span>
+                  <span className="block text-[11px]">
+                    {formatBytes(Number.isFinite(file.size) ? file.size : getTextBytes(file.content))}
+                  </span>
                 </span>
               </button>
             ))}

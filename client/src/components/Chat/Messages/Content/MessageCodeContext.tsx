@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { ChevronRight, FileCode2, FileText } from 'lucide-react';
 import type { TCodeContext } from 'librechat-data-provider';
-import { formatBytes } from '~/common';
+import { formatBytes, getTextBytes } from '~/common';
 
 function MessageCodeContext({ codeContext }: { codeContext?: TCodeContext }) {
   const [isOpen, setIsOpen] = useState(false);
@@ -18,6 +18,19 @@ function MessageCodeContext({ codeContext }: { codeContext?: TCodeContext }) {
     }
     return codeContext.files.find((file) => file.path === activePath) ?? codeContext.files[0];
   }, [activePath, codeContext]);
+  const totalBytes = useMemo(() => {
+    if (!codeContext) {
+      return 0;
+    }
+    if (Number.isFinite(codeContext.totalBytes)) {
+      return codeContext.totalBytes;
+    }
+    return codeContext.files.reduce(
+      (total, file) =>
+        total + (Number.isFinite(file.size) ? file.size : getTextBytes(file.content)),
+      0,
+    );
+  }, [codeContext]);
 
   if (!codeContext || codeContext.files.length === 0) {
     return null;
@@ -37,7 +50,7 @@ function MessageCodeContext({ codeContext }: { codeContext?: TCodeContext }) {
       >
         <FileCode2 className="h-4 w-4 shrink-0 text-orange-500" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate">
-          Code files · {codeContext.files.length} files · {formatBytes(codeContext.totalBytes)}
+          Code files · {codeContext.files.length} files · {formatBytes(totalBytes)}
         </span>
         <ChevronRight
           className={`h-4 w-4 shrink-0 transition-transform ${isOpen ? 'rotate-90' : ''}`}
@@ -62,7 +75,9 @@ function MessageCodeContext({ codeContext }: { codeContext?: TCodeContext }) {
                 <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium">{file.path}</span>
-                  <span className="block text-[11px]">{formatBytes(file.size)}</span>
+                  <span className="block text-[11px]">
+                    {formatBytes(Number.isFinite(file.size) ? file.size : getTextBytes(file.content))}
+                  </span>
                 </span>
               </button>
             ))}

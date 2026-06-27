@@ -2,14 +2,16 @@ import type { TCodeContext, TCodeContextFile } from 'librechat-data-provider';
 
 export const MAX_CODE_CONTEXT_BYTES = 120 * 1024;
 
-export const formatBytes = (bytes: number) => {
-  if (bytes < 1024) {
-    return `${bytes} B`;
+export const formatBytes = (bytes?: number | null) => {
+  const safeBytes = Number.isFinite(bytes) && bytes != null ? bytes : 0;
+
+  if (safeBytes < 1024) {
+    return `${safeBytes} B`;
   }
-  if (bytes < 1024 * 1024) {
-    return `${(bytes / 1024).toFixed(1)} KB`;
+  if (safeBytes < 1024 * 1024) {
+    return `${(safeBytes / 1024).toFixed(1)} KB`;
   }
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(safeBytes / 1024 / 1024).toFixed(1)} MB`;
 };
 
 export const getTextBytes = (text: string) => new TextEncoder().encode(text).length;
@@ -23,7 +25,7 @@ export const createCombinedCodeContextSnippet = (files: TCodeContextFile[]) =>
 export const createCodeContextPacket = (files: TCodeContextFile[]): TCodeContext => {
   const normalizedFiles = files.map((file) => ({
     path: file.path,
-    size: file.size,
+    size: Number.isFinite(file.size) ? file.size : getTextBytes(file.content),
     content: file.content,
   }));
   const totalBytes = getTextBytes(createCombinedCodeContextSnippet(normalizedFiles));

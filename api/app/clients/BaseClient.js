@@ -131,7 +131,13 @@ const getReferencedCodeContext = (raw) => {
   }
 
   return {
+    id:
+      typeof raw.id === 'string' && raw.id.trim()
+        ? raw.id.slice(0, CODE_CONTEXT_MAX_PATH_CHARS)
+        : `code-context-${Date.now()}`,
     title: typeof raw.title === 'string' ? raw.title.slice(0, CODE_CONTEXT_MAX_PATH_CHARS) : '',
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+    totalBytes: files.reduce((total, file) => total + Buffer.byteLength(file.content, 'utf8'), 0),
     files,
   };
 };
