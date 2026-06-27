@@ -149,6 +149,11 @@ function parsePatchFiles(patchText) {
   };
 }
 
+function normalizePatchText(patchText) {
+  const normalized = patchText.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
+  return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
+}
+
 async function git(args, options = {}) {
   return await execFileAsync('git', args, {
     cwd: WORKSPACE_WRITE_ROOT,
@@ -287,7 +292,8 @@ router.post('/apply-patch', async (req, res, next) => {
       return res.status(403).json({ message: 'Workspace write root is not configured.' });
     }
 
-    const patchText = typeof req.body?.patch === 'string' ? req.body.patch : '';
+    const rawPatchText = typeof req.body?.patch === 'string' ? req.body.patch : '';
+    const patchText = normalizePatchText(rawPatchText);
     const patchBytes = Buffer.byteLength(patchText, 'utf8');
     if (!patchText.trim()) {
       return res.status(400).json({ message: 'Patch is empty.' });
@@ -324,7 +330,7 @@ router.post('/apply-patch', async (req, res, next) => {
     });
   } catch (error) {
     const message = error?.stderr || error?.message || 'Patch apply failed.';
-    return next(new Error(message.trim()));
+    return res.status(400).json({ message: message.trim() });
   } finally {
     if (patchFile) {
       await fs.rm(path.dirname(patchFile), { recursive: true, force: true }).catch(() => {});

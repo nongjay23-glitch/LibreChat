@@ -61,6 +61,21 @@ type DiffFileSummary = {
   warnings: string[];
 };
 
+type RequestError = Error & {
+  response?: {
+    data?: {
+      message?: string;
+    };
+  };
+};
+
+const getRequestErrorMessage = (err: unknown, fallback: string) => {
+  if (err instanceof Error) {
+    return (err as RequestError).response?.data?.message || err.message;
+  }
+  return fallback;
+};
+
 const getDiffPath = (rawPath: string) =>
   rawPath
     .trim()
@@ -370,7 +385,7 @@ export default function CodePanel() {
       }
     } catch (err) {
       setApplyState('failed');
-      setApplyMessage(err instanceof Error ? err.message : 'Apply patch failed');
+      setApplyMessage(getRequestErrorMessage(err, 'Apply patch failed'));
     }
   };
 
