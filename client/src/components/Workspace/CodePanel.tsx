@@ -6,9 +6,11 @@ import {
   Copy,
   FileText,
   Folder,
+  History,
   ListPlus,
   Lock,
   RefreshCw,
+  RotateCcw,
   Send,
   ShieldCheck,
   Trash2,
@@ -31,6 +33,7 @@ type WorkspaceStatus = {
   mode: string;
   maxReadBytes: number;
   canApplyPatches?: boolean;
+  canRestoreCheckpoints?: boolean;
 };
 
 type WorkspaceItem = {
@@ -51,6 +54,16 @@ type WorkspaceFileResponse = {
   path: string;
   size: number;
   content: string;
+};
+
+type WorkspaceCheckpoint = {
+  checkpointId: string;
+  savedFiles: string[];
+  createdFiles?: string[];
+};
+
+type WorkspaceCheckpointsResponse = {
+  checkpoints: WorkspaceCheckpoint[];
 };
 
 type DiffFileSummary = {
@@ -75,6 +88,8 @@ const getRequestErrorMessage = (err: unknown, fallback: string) => {
   }
   return fallback;
 };
+
+const formatCheckpointId = (checkpointId: string) => checkpointId.replace('T', ' ').replace(/-\d{3}Z$/, 'Z');
 
 const getDiffPath = (rawPath: string) =>
   rawPath
@@ -203,6 +218,12 @@ export default function CodePanel() {
     'idle',
   );
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  const [checkpoints, setCheckpoints] = useState<WorkspaceCheckpoint[]>([]);
+  const [isLoadingCheckpoints, setIsLoadingCheckpoints] = useState(false);
+  const [restoreState, setRestoreState] = useState<'idle' | 'restoring' | 'restored' | 'failed'>(
+    'idle',
+  );
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(0));
   const conversationId = useRecoilValue(store.conversationIdByIndex(0)) ?? Constants.NEW_CONVO;
   const setPendingCodeContext = useSetRecoilState(
@@ -288,6 +309,22 @@ export default function CodePanel() {
     setApplyMessage(null);
     setPendingWorkspacePatch(null);
   }, [pendingWorkspacePatch, setPendingWorkspacePatch]);
+
+  const loadCheckpoints = useCallback(async () => {
+    setIsLoadingCheckpoints(true);
+    try {
+      const data = (await request.get('/api/workspace/checkpoints')) as WorkspaceCheckpointsResponse;
+      setCheckpoints(data.checkpoints);
+    } catch {
+      setCheckpoints([]);
+    } finally {
+      setIsLoadingCheckpoints(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadCheckpoints();
+  }, [loadCheckpoints]);
 
   const goToCrumb = (index: number) => {
     const nextPath = pathParts.slice(0, index + 1).join('/');
@@ -396,9 +433,36 @@ export default function CodePanel() {
       if (selectedFile) {
         await loadFile(selectedFile.path);
       }
+      await loadCheckpoints();
     } catch (err) {
       setApplyState('failed');
       setApplyMessage(getRequestErrorMessage(err, 'Apply patch failed'));
+    }
+  };
+
+  const restoreCheckpoint = async (checkpointId: string) => {
+    if (restoreState === 'restoring') {
+      return;
+    }
+
+    setRestoreState('restoring');
+    setRestoreMessage(null);
+    try {
+      const data = (await request.post('/api/workspace/restore-checkpoint', {
+        checkpointId,
+      })) as { restored: boolean; restoredFiles: string[]; removedFiles: string[] };
+      setRestoreState(data.restored ? 'restored' : 'failed');
+      setRestoreMessage(
+        `Restored ${data.restoredFiles.length} files, removed ${data.removedFiles.length} created files.`,
+      );
+      await loadTree(currentPath);
+      if (selectedFile) {
+        await loadFile(selectedFile.path);
+      }
+      await loadCheckpoints();
+    } catch (err) {
+      setRestoreState('failed');
+      setRestoreMessage(getRequestErrorMessage(err, 'Restore checkpoint failed'));
     }
   };
 
@@ -733,6 +797,79 @@ export default function CodePanel() {
             </button>
           </div>
         </div>
+      </div>
+
+      <div className="rounded-lg border border-border-light p-3">
+        <div className="mb-3">
+          <div className="flex items-center gap-2 font-medium text-text-primary">
+            <History className="h-4 w-4 text-orange-500" aria-hidden="true" />
+            Checkpoints
+          </div>
+          <div className="mt-1 text-xs leading-5 text-text-secondary">
+            จุดย้อนกลับที่ระบบสร้างก่อน Apply changes ใช้เมื่อต้องการคืนไฟล์จาก patch ก่อนหน้า
+          </div>
+        </div>
+
+        {restoreMessage != null && (
+          <div
+            className={`mb-3 rounded-md border p-2 text-xs leading-5 ${
+              restoreState === 'failed'
+                ? 'border-red-500/30 bg-red-500/10 text-red-500'
+                : 'border-green-500/30 bg-green-500/10 text-green-500'
+            }`}
+          >
+            {restoreMessage}
+          </div>
+        )}
+
+        {isLoadingCheckpoints ? (
+          <div className="rounded-md bg-black/20 p-3 text-xs text-text-secondary">
+            Loading checkpoints...
+          </div>
+        ) : checkpoints.length > 0 ? (
+          <div className="max-h-52 space-y-2 overflow-y-auto">
+            {checkpoints.slice(0, 6).map((checkpoint) => (
+              <div
+                key={checkpoint.checkpointId}
+                className="rounded-md border border-border-light p-2 text-xs"
+              >
+                <div className="mb-2 flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-text-primary">
+                      {formatCheckpointId(checkpoint.checkpointId)}
+                    </div>
+                    <div className="mt-1 text-text-secondary">
+                      saved {checkpoint.savedFiles.length} · created{' '}
+                      {checkpoint.createdFiles?.length ?? 0}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="flex shrink-0 items-center gap-1 rounded-md border border-orange-500/50 px-2 py-1 font-medium text-orange-500 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-border-light disabled:text-text-secondary disabled:opacity-60"
+                    disabled={!status?.canRestoreCheckpoints || restoreState === 'restoring'}
+                    onClick={() => restoreCheckpoint(checkpoint.checkpointId)}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                    {restoreState === 'restoring' ? 'Restoring...' : 'Restore'}
+                  </button>
+                </div>
+                <div className="space-y-1 text-text-secondary">
+                  {[...checkpoint.savedFiles, ...(checkpoint.createdFiles ?? [])]
+                    .slice(0, 3)
+                    .map((file) => (
+                      <div key={file} className="truncate">
+                        {file}
+                      </div>
+                    ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-md bg-black/20 p-3 text-xs text-text-secondary">
+            No checkpoints yet
+          </div>
+        )}
       </div>
 
       <div className="rounded-lg border border-border-light p-3 text-xs leading-5 text-text-secondary">

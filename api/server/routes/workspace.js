@@ -13,6 +13,7 @@ const MAX_LIST_ITEMS = 250;
 const MAX_READ_BYTES = 200 * 1024;
 const MAX_PATCH_BYTES = 512 * 1024;
 const MAX_PATCH_FILES = 20;
+const CHECKPOINT_DIR = '.workspace-checkpoints';
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_READONLY_ROOT || '/readonly-workspace');
 const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
   ? path.resolve(process.env.WORKSPACE_WRITE_ROOT)
@@ -70,6 +71,35 @@ function resolveWorkspacePath(relativePath = '') {
   return { normalized, resolved };
 }
 
+function resolveWritableWorkspacePath(relativePath = '') {
+  if (!WORKSPACE_WRITE_ROOT) {
+    throw new Error('Workspace write root is not configured.');
+  }
+
+  const normalized = normalizeRelativePath(relativePath);
+  const resolved = path.resolve(WORKSPACE_WRITE_ROOT, normalized);
+  if (resolved !== WORKSPACE_WRITE_ROOT && !resolved.startsWith(`${WORKSPACE_WRITE_ROOT}${path.sep}`)) {
+    throw new Error('Path is outside the writable workspace');
+  }
+  return { normalized, resolved };
+}
+
+function resolveCheckpointPath(checkpointId = '') {
+  if (!WORKSPACE_WRITE_ROOT) {
+    throw new Error('Workspace write root is not configured.');
+  }
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/.test(String(checkpointId))) {
+    throw new Error('Invalid checkpoint id');
+  }
+
+  const checkpointRoot = path.resolve(WORKSPACE_WRITE_ROOT, CHECKPOINT_DIR, checkpointId);
+  const checkpointBase = path.resolve(WORKSPACE_WRITE_ROOT, CHECKPOINT_DIR);
+  if (!checkpointRoot.startsWith(`${checkpointBase}${path.sep}`)) {
+    throw new Error('Checkpoint path is outside the checkpoint directory');
+  }
+  return checkpointRoot;
+}
+
 function isBlocked(relativePath = '') {
   const normalized = normalizeRelativePath(relativePath);
   if (!normalized) {
@@ -100,10 +130,12 @@ function getDiffPath(rawPath = '') {
 
 function parsePatchFiles(patchText) {
   const files = new Map();
+  const createdFiles = new Map();
   const lines = patchText.split(/\r?\n/);
   let sawDelete = false;
   let sawRename = false;
   let sawBinary = false;
+  let nextPathIsCreate = false;
 
   const addPath = (rawPath) => {
     const normalized = getDiffPath(rawPath);
@@ -116,6 +148,10 @@ function parsePatchFiles(patchText) {
     }
     const { normalized: resolvedPath } = resolveWorkspacePath(safePath);
     files.set(resolvedPath, true);
+    if (nextPathIsCreate) {
+      createdFiles.set(resolvedPath, true);
+      nextPathIsCreate = false;
+    }
   };
 
   for (const line of lines) {
@@ -125,8 +161,13 @@ function parsePatchFiles(patchText) {
       addPath(parts[3]);
       continue;
     }
-    if (line.startsWith('--- /dev/null') || line.startsWith('+++ /dev/null')) {
-      sawDelete = sawDelete || line.startsWith('+++ /dev/null');
+    if (line.startsWith('--- /dev/null')) {
+      nextPathIsCreate = true;
+      continue;
+    }
+    if (line.startsWith('+++ /dev/null')) {
+      sawDelete = true;
+      nextPathIsCreate = false;
       continue;
     }
     if (line.startsWith('--- ') || line.startsWith('+++ ')) {
@@ -143,6 +184,7 @@ function parsePatchFiles(patchText) {
 
   return {
     files: [...files.keys()],
+    createdFiles: [...createdFiles.keys()],
     sawDelete,
     sawRename,
     sawBinary,
@@ -163,36 +205,84 @@ async function git(args, options = {}) {
   });
 }
 
-async function createFileCheckpoint(files) {
+async function createFileCheckpoint(files, createdFiles = []) {
   const checkpointId = new Date().toISOString().replace(/[:.]/g, '-');
-  const checkpointRoot = path.join(WORKSPACE_WRITE_ROOT, '.workspace-checkpoints', checkpointId);
+  const checkpointRoot = path.join(WORKSPACE_WRITE_ROOT, CHECKPOINT_DIR, checkpointId);
   const savedFiles = [];
+  const normalizedCreatedFiles = [];
 
   await fs.mkdir(checkpointRoot, { recursive: true });
   for (const file of files) {
-    const sourcePath = path.resolve(WORKSPACE_WRITE_ROOT, file);
-    if (sourcePath !== WORKSPACE_WRITE_ROOT && !sourcePath.startsWith(`${WORKSPACE_WRITE_ROOT}${path.sep}`)) {
-      throw new Error(`Checkpoint path is outside workspace: ${file}`);
-    }
+    const { normalized, resolved: sourcePath } = resolveWritableWorkspacePath(file);
 
     const stats = await fs.stat(sourcePath).catch(() => null);
     if (!stats?.isFile()) {
       continue;
     }
 
-    const backupPath = path.join(checkpointRoot, file);
+    const backupPath = path.join(checkpointRoot, normalized);
     await fs.mkdir(path.dirname(backupPath), { recursive: true });
     await fs.copyFile(sourcePath, backupPath);
-    savedFiles.push(file);
+    savedFiles.push(normalized);
+  }
+
+  for (const file of createdFiles) {
+    const { normalized } = resolveWritableWorkspacePath(file);
+    if (!isBlocked(normalized)) {
+      normalizedCreatedFiles.push(normalized);
+    }
   }
 
   await fs.writeFile(
     path.join(checkpointRoot, 'manifest.json'),
-    JSON.stringify({ checkpointId, savedFiles }, null, 2),
+    JSON.stringify({ checkpointId, savedFiles, createdFiles: normalizedCreatedFiles }, null, 2),
     'utf8',
   );
 
   return checkpointId;
+}
+
+async function readCheckpointManifest(checkpointId) {
+  const checkpointRoot = resolveCheckpointPath(checkpointId);
+  const raw = await fs.readFile(path.join(checkpointRoot, 'manifest.json'), 'utf8');
+  const manifest = JSON.parse(raw);
+  return {
+    checkpointId: manifest.checkpointId,
+    savedFiles: Array.isArray(manifest.savedFiles) ? manifest.savedFiles : [],
+    createdFiles: Array.isArray(manifest.createdFiles) ? manifest.createdFiles : [],
+  };
+}
+
+async function listCheckpointManifests() {
+  if (!WORKSPACE_WRITE_ROOT) {
+    return [];
+  }
+
+  const checkpointBase = path.join(WORKSPACE_WRITE_ROOT, CHECKPOINT_DIR);
+  const entries = await fs.readdir(checkpointBase, { withFileTypes: true }).catch(() => []);
+  const checkpoints = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    try {
+      checkpoints.push(await readCheckpointManifest(entry.name));
+    } catch {
+      // Ignore incomplete checkpoint folders; they are not restorable.
+    }
+  }
+
+  return checkpoints.sort((a, b) => b.checkpointId.localeCompare(a.checkpointId)).slice(0, 20);
+}
+
+function validateRestorablePath(file) {
+  const { normalized, resolved } = resolveWritableWorkspacePath(file);
+  if (!normalized || normalized.includes('../') || isBlocked(normalized)) {
+    throw new Error(`Blocked restore path: ${normalized}`);
+  }
+  return { normalized, resolved };
 }
 
 router.get('/status', async (_req, res) => {
@@ -205,6 +295,7 @@ router.get('/status', async (_req, res) => {
       mode: 'read-only',
       maxReadBytes: MAX_READ_BYTES,
       canApplyPatches: Boolean(writeStats?.isDirectory()),
+      canRestoreCheckpoints: Boolean(writeStats?.isDirectory()),
     });
   } catch {
     return res.json({
@@ -213,7 +304,17 @@ router.get('/status', async (_req, res) => {
       mode: 'read-only',
       maxReadBytes: MAX_READ_BYTES,
       canApplyPatches: false,
+      canRestoreCheckpoints: false,
     });
+  }
+});
+
+router.get('/checkpoints', async (_req, res, next) => {
+  try {
+    const checkpoints = await listCheckpointManifests();
+    return res.json({ checkpoints });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -320,7 +421,7 @@ router.post('/apply-patch', async (req, res, next) => {
     await fs.writeFile(patchFile, patchText, 'utf8');
 
     await git(['apply', '--check', '--whitespace=nowarn', patchFile]);
-    const checkpoint = await createFileCheckpoint(parsed.files);
+    const checkpoint = await createFileCheckpoint(parsed.files, parsed.createdFiles);
     await git(['apply', '--whitespace=nowarn', patchFile]);
 
     return res.json({
@@ -335,6 +436,48 @@ router.post('/apply-patch', async (req, res, next) => {
     if (patchFile) {
       await fs.rm(path.dirname(patchFile), { recursive: true, force: true }).catch(() => {});
     }
+  }
+});
+
+router.post('/restore-checkpoint', async (req, res) => {
+  try {
+    if (!WORKSPACE_WRITE_ROOT) {
+      return res.status(403).json({ message: 'Workspace write root is not configured.' });
+    }
+
+    const checkpointId = typeof req.body?.checkpointId === 'string' ? req.body.checkpointId : '';
+    const checkpointRoot = resolveCheckpointPath(checkpointId);
+    const manifest = await readCheckpointManifest(checkpointId);
+    const restoredFiles = [];
+    const removedFiles = [];
+
+    for (const file of manifest.savedFiles) {
+      const { normalized, resolved } = validateRestorablePath(file);
+      const source = path.resolve(checkpointRoot, normalized);
+      if (source !== checkpointRoot && !source.startsWith(`${checkpointRoot}${path.sep}`)) {
+        throw new Error(`Checkpoint source is outside checkpoint directory: ${normalized}`);
+      }
+
+      await fs.mkdir(path.dirname(resolved), { recursive: true });
+      await fs.copyFile(source, resolved);
+      restoredFiles.push(normalized);
+    }
+
+    for (const file of manifest.createdFiles) {
+      const { normalized, resolved } = validateRestorablePath(file);
+      await fs.rm(resolved, { force: true });
+      removedFiles.push(normalized);
+    }
+
+    return res.json({
+      restored: true,
+      checkpointId,
+      restoredFiles,
+      removedFiles,
+    });
+  } catch (error) {
+    const message = error?.message || 'Restore checkpoint failed.';
+    return res.status(400).json({ message: message.trim() });
   }
 });
 
