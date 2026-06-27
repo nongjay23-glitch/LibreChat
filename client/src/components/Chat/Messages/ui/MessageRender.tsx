@@ -83,7 +83,9 @@ function areMessageRenderPropsEqual(prev: MessageRenderProps, next: MessageRende
     prevMsg.iconURL === nextMsg.iconURL &&
     prevMsg.feedback?.rating === nextMsg.feedback?.rating &&
     (prevMsg.files?.length ?? 0) === (nextMsg.files?.length ?? 0) &&
-    (prevMsg.quotes?.length ?? 0) === (nextMsg.quotes?.length ?? 0)
+    (prevMsg.quotes?.length ?? 0) === (nextMsg.quotes?.length ?? 0) &&
+    prevMsg.codeContext?.id === nextMsg.codeContext?.id &&
+    (prevMsg.codeContext?.files.length ?? 0) === (nextMsg.codeContext?.files.length ?? 0)
   );
 }
 

@@ -479,6 +479,10 @@ class BaseClient {
       if (referencedQuotes != null) {
         userMessage.quotes = referencedQuotes;
       }
+      const referencedCodeContext = getReferencedCodeContext(this.options.req?.body?.codeContext);
+      if (referencedCodeContext != null) {
+        userMessage.codeContext = referencedCodeContext;
+      }
     }
 
     if (typeof opts?.getReqData === 'function') {

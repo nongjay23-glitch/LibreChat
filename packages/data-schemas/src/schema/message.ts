@@ -151,6 +151,28 @@ const messageSchema: Schema<IMessage> = new Schema(
      * count), so they are not duplicated into the stored `text`.
      */
     quotes: { type: [String], default: undefined },
+    /**
+     * Read-only project files attached from the local Code workspace for this
+     * turn. UI metadata only; model-facing merge happens from the request body.
+     */
+    codeContext: {
+      type: {
+        id: String,
+        title: String,
+        createdAt: Number,
+        totalBytes: Number,
+        files: [
+          {
+            path: String,
+            size: Number,
+            content: String,
+            _id: false,
+          },
+        ],
+      },
+      _id: false,
+      default: undefined,
+    },
     /*
     attachments: {
       type: [

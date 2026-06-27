@@ -496,6 +496,7 @@ export default function useChatFunctions({
        * also merges these into the model-facing user text at request time.
        */
       quotes: quotes.length > 0 ? quotes : undefined,
+      codeContext: codeContext ?? undefined,
     };
 
     const submissionFiles = overrideFiles ?? targetParentMessage?.files;

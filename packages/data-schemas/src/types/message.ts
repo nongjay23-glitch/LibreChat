@@ -1,4 +1,4 @@
-import type { TFeedbackRating, TFeedbackTag } from 'librechat-data-provider';
+import type { TCodeContext, TFeedbackRating, TFeedbackTag } from 'librechat-data-provider';
 import type { Document } from 'mongoose';
 
 // @ts-ignore
@@ -56,6 +56,8 @@ export interface IMessage extends Document {
   alwaysAppliedSkills?: string[];
   /** Verbatim excerpts the user quoted to reference on this turn. UI-only metadata for `MessageQuotes`. */
   quotes?: string[];
+  /** Read-only project files attached from Code workspace. UI-only metadata for `MessageCodeContext`. */
+  codeContext?: TCodeContext;
   expiredAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;

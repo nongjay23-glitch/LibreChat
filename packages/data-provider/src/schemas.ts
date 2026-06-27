@@ -821,6 +821,26 @@ export const tMessageSchema = z.object({
    * request time and counted in the user message token count.
    */
   quotes: z.array(z.string()).optional(),
+  /**
+   * Read-only project files attached from the local Code workspace for this turn.
+   * The user bubble renders these as compact file references while the backend
+   * merges the content into the model-facing prompt at request time.
+   */
+  codeContext: z
+    .object({
+      id: z.string(),
+      title: z.string(),
+      createdAt: z.number(),
+      totalBytes: z.number(),
+      files: z.array(
+        z.object({
+          path: z.string(),
+          size: z.number(),
+          content: z.string(),
+        }),
+      ),
+    })
+    .optional(),
 });
 
 export type MemoryArtifact = {
