@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useRecoilValue } from 'recoil';
-import { MessagesSquare } from 'lucide-react';
+import { Code2, MessagesSquare, UsersRound } from 'lucide-react';
 import { useUserKeyQuery } from 'librechat-data-provider/react-query';
 import { getConfigDefaults, getEndpointField } from 'librechat-data-provider';
 import type { TEndpointsConfig } from 'librechat-data-provider';
@@ -8,7 +8,9 @@ import type { NavLink } from '~/common';
 import ConversationsSection from '~/components/UnifiedSidebar/ConversationsSection';
 import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import useSideNavLinks from '~/hooks/Nav/useSideNavLinks';
+import CodePanel from '~/components/Workspace/CodePanel';
 import store from '~/store';
+import CoworkPanel from '~/components/Workspace/CoworkPanel';
 
 const defaultInterface = getConfigDefaults().interface;
 
@@ -57,8 +59,22 @@ export default function useUnifiedSidebarLinks() {
       id: 'conversations',
       Component: ConversationsSection,
     };
+    const coworkLink: NavLink = {
+      title: 'com_ui_cowork',
+      label: '',
+      icon: UsersRound,
+      id: 'cowork',
+      Component: CoworkPanel,
+    };
+    const codeLink: NavLink = {
+      title: 'com_ui_code',
+      label: '',
+      icon: Code2,
+      id: 'code-workspace',
+      Component: CodePanel,
+    };
 
-    return [conversationLink, ...sideNavLinks];
+    return [conversationLink, coworkLink, codeLink, ...sideNavLinks];
   }, [sideNavLinks]);
 
   return links;

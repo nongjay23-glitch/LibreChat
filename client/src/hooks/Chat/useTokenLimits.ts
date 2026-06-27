@@ -11,7 +11,7 @@ function normalizeTokenConfigKey(endpoint: string): string {
 }
 
 export interface TokenLimits {
-  /** Statically resolved max context; live snapshots override this at run time */
+  /** Max context for the currently selected model/spec. */
   maxContextTokens?: number;
   rates?: TModelTokenomics;
   endpoint?: string;
@@ -56,9 +56,9 @@ export default function useTokenLimits(conversation: TConversation | null): Toke
 
     const rates = tokenConfig?.[lookupEndpoint]?.[lookupModel];
     const maxContextTokens =
+      toNumber(specPreset?.maxContextTokens) ??
       toNumber(maxContextSetting) ??
       toNumber(agent?.model_parameters?.maxContextTokens) ??
-      toNumber(specPreset?.maxContextTokens) ??
       rates?.context;
 
     return { maxContextTokens, rates, endpoint: lookupEndpoint, model: lookupModel };

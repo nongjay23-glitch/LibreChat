@@ -258,6 +258,19 @@ export default function useChatFunctions({
     [],
   );
 
+  const drainPendingCodeContext = useRecoilCallback(
+    ({ snapshot, reset }) =>
+      (convoId: string) => {
+        const loadable = snapshot.getLoadable(store.pendingCodeContextByConvoId(convoId));
+        const codeContext = loadable.state === 'hasValue' ? loadable.contents : null;
+        if (codeContext != null) {
+          reset(store.pendingCodeContextByConvoId(convoId));
+        }
+        return codeContext;
+      },
+    [],
+  );
+
   const ask: TAskFunction = (
     {
       text,
@@ -355,6 +368,10 @@ export default function useChatFunctions({
         quotes = drainPendingQuotes(conversationId ?? Constants.NEW_CONVO);
       }
     }
+    const codeContext =
+      !isRegenerate && !isContinued && !isEdited
+        ? drainPendingCodeContext(conversationId ?? Constants.NEW_CONVO)
+        : null;
     const isEditOrContinue = isEdited || isContinued;
 
     let currentMessages: TMessage[] = overrideMessages ?? getMessages() ?? [];
@@ -620,6 +637,7 @@ export default function useChatFunctions({
       editedContent,
       addedConvo,
       manualSkills: manualSkills.length > 0 ? manualSkills : undefined,
+      codeContext: codeContext ?? undefined,
     };
 
     if (isRegenerate) {

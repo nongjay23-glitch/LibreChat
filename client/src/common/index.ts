@@ -1,6 +1,7 @@
 export * from './a11y';
 export * from './artifacts';
 export * from './types';
+export * from './codeContext';
 export * from './menus';
 export * from './tools';
 export * from './selector';

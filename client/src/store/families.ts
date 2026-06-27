@@ -11,7 +11,13 @@ import {
   useSetRecoilState,
   useRecoilCallback,
 } from 'recoil';
-import type { EModelEndpoint, TConversation, TSubmission, TPreset } from 'librechat-data-provider';
+import type {
+  EModelEndpoint,
+  TCodeContext,
+  TConversation,
+  TSubmission,
+  TPreset,
+} from 'librechat-data-provider';
 import type { TOptionSettings, ExtendedFile } from '~/common';
 import {
   clearModelForNonEphemeralAgent,
@@ -300,6 +306,17 @@ const pendingQuotesByConvoId = atomFamily<string[], string>({
   default: [],
 });
 
+/**
+ * Per-conversation code context attached from the local read-only workspace for
+ * the next submission. The compose UI shows this as a compact chip; the submit
+ * pipeline drains it into the payload so the backend can merge it into the
+ * model-facing prompt without filling the visible textarea.
+ */
+const pendingCodeContextByConvoId = atomFamily<TCodeContext | null, string>({
+  key: 'pendingCodeContextByConvoId',
+  default: null,
+});
+
 const globalAudioURLFamily = atomFamily<string | null, string | number | null>({
   key: 'globalAudioURLByIndex',
   default: null,
@@ -466,5 +483,6 @@ export default {
   showSkillsPopoverFamily,
   pendingManualSkillsByConvoId,
   pendingQuotesByConvoId,
+  pendingCodeContextByConvoId,
   updateConversationSelector,
 };

@@ -87,6 +87,81 @@ const DISPLAY_ATTACHMENT_FIELDS = [
   'name',
 ];
 const PER_MESSAGE_FILE_ATTACHMENT_FIELDS = ['messageId', 'toolCallId'];
+const CODE_CONTEXT_MAX_FILES = 20;
+const CODE_CONTEXT_MAX_CHARS = 160 * 1024;
+const CODE_CONTEXT_MAX_PATH_CHARS = 512;
+
+const getReferencedCodeContext = (raw) => {
+  if (!raw || !Array.isArray(raw.files)) {
+    return null;
+  }
+
+  const files = [];
+  let totalChars = 0;
+  for (const item of raw.files) {
+    if (!item || typeof item.path !== 'string' || typeof item.content !== 'string') {
+      continue;
+    }
+
+    const path = item.path.trim().slice(0, CODE_CONTEXT_MAX_PATH_CHARS);
+    if (!path) {
+      continue;
+    }
+
+    const remainingChars = CODE_CONTEXT_MAX_CHARS - totalChars;
+    if (remainingChars <= 0) {
+      break;
+    }
+
+    const content = item.content.slice(0, remainingChars);
+    totalChars += content.length;
+    files.push({
+      path,
+      size: Number.isFinite(item.size) ? item.size : content.length,
+      content,
+    });
+
+    if (files.length >= CODE_CONTEXT_MAX_FILES) {
+      break;
+    }
+  }
+
+  if (files.length === 0) {
+    return null;
+  }
+
+  return {
+    title: typeof raw.title === 'string' ? raw.title.slice(0, CODE_CONTEXT_MAX_PATH_CHARS) : '',
+    files,
+  };
+};
+
+const formatCodeContextAsMarkdown = (codeContext) => {
+  const files = codeContext?.files;
+  if (!Array.isArray(files) || files.length === 0) {
+    return '';
+  }
+
+  const fileBlocks = files
+    .map((file) => `File: ${file.path}\n\n\`\`\`\n${file.content}\n\`\`\``)
+    .join('\n\n---\n\n');
+
+  return [
+    'Project code context attached by the user.',
+    'Treat these files as read-only reference context unless the user explicitly asks for changes.',
+    '',
+    fileBlocks,
+  ].join('\n');
+};
+
+const mergeCodeContextText = (text, codeContext) => {
+  const block = formatCodeContextAsMarkdown(codeContext);
+  if (!block) {
+    return text;
+  }
+  const body = text ?? '';
+  return body.length > 0 ? `${block}\n\nUser request:\n${body}` : block;
+};
 
 const pickFields = (source, fields) => {
   const picked = {};
@@ -590,16 +665,27 @@ class BaseClient {
      */
     const parentMessageId = isEdited ? head : userMessage.messageId;
     this.parentMessageId = parentMessageId;
-    let {
-      prompt: payload,
-      tokenCountMap,
-      promptTokens,
-    } = await this.buildMessages(
-      this.currentMessages,
+    let payload;
+    let tokenCountMap;
+    let promptTokens;
+    const codeContext = getReferencedCodeContext(this.options.req?.body?.codeContext);
+    const messagesForBuild =
+      codeContext == null
+        ? this.currentMessages
+        : this.currentMessages.map((currentMessage) =>
+            currentMessage.messageId === userMessage.messageId
+              ? {
+                  ...currentMessage,
+                  text: mergeCodeContextText(currentMessage.text, codeContext),
+                }
+              : currentMessage,
+          );
+    ({ prompt: payload, tokenCountMap, promptTokens } = await this.buildMessages(
+      messagesForBuild,
       parentMessageId,
       this.getBuildMessagesOptions(opts),
       opts,
-    );
+    ));
 
     if (tokenCountMap && tokenCountMap[userMessage.messageId]) {
       userMessage.tokenCount = tokenCountMap[userMessage.messageId];

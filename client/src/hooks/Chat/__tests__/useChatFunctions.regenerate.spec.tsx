@@ -29,7 +29,10 @@ jest.mock('recoil', () => ({
   useRecoilCallback: (factory: any) =>
     factory({
       snapshot: {
-        getLoadable: () => ({ state: 'hasValue', contents: [] }),
+        getLoadable: (atom: unknown) => ({
+          state: 'hasValue',
+          contents: String(atom).includes('pendingCodeContext') ? null : [],
+        }),
       },
       set: jest.fn(),
       reset: jest.fn(),
@@ -49,6 +52,8 @@ jest.mock('~/store', () => ({
     isSubmittingFamily: () => 'isSubmitting',
     showStopButtonByIndex: () => 'showStopButton',
     pendingManualSkillsByConvoId: () => 'pendingManualSkills',
+    pendingQuotesByConvoId: () => 'pendingQuotes',
+    pendingCodeContextByConvoId: () => 'pendingCodeContext',
     messagesSiblingIdxFamily: () => 'messagesSiblingIdx',
   },
   useGetEphemeralAgent: () => mockGetEphemeralAgent,

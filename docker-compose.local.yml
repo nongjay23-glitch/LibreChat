@@ -1,0 +1,46 @@
+services:
+  api:
+    container_name: LibreChat
+    image: librechat-local-qwen:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.local
+    ports:
+      - "${PORT:-3080}:${PORT:-3080}"
+    depends_on:
+      - mongodb
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongodb:27017/LibreChat
+      - CONFIG_PATH=/app/librechat.yaml
+      - SEARCH=false
+      - WORKSPACE_READONLY_ROOT=/readonly-workspace
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+      - type: bind
+        source: ./librechat.yaml
+        target: /app/librechat.yaml
+      - ./images:/app/client/public/images
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+      - ./skill:/app/skill
+      - type: bind
+        source: .
+        target: /readonly-workspace
+        read_only: true
+
+  mongodb:
+    container_name: chat-mongodb
+    image: mongo:7.0
+    restart: unless-stopped
+    volumes:
+      - ./data-node:/data/db
+    command: mongod --noauth

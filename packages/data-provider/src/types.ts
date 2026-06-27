@@ -110,6 +110,20 @@ export type TEphemeralAgent = {
   skills?: boolean;
 };
 
+export type TCodeContextFile = {
+  path: string;
+  size: number;
+  content: string;
+};
+
+export type TCodeContext = {
+  id: string;
+  title: string;
+  createdAt: number;
+  totalBytes: number;
+  files: TCodeContextFile[];
+};
+
 export type TPayload = Partial<TMessage> &
   Partial<TEndpointOption> & {
     isContinued: boolean;
@@ -128,6 +142,8 @@ export type TPayload = Partial<TMessage> &
      * before the LLM turn runs.
      */
     manualSkills?: string[];
+    /** Read-only project files attached from the local Code workspace for this turn. */
+    codeContext?: TCodeContext;
     /** Browser IANA timezone (e.g. `America/New_York`) used to resolve local-time prompt variables server-side. */
     timezone?: string;
   };
@@ -163,6 +179,8 @@ export type TSubmission = {
   addedConvo?: TConversation;
   /** Skills the user invoked via the `$` popover for this submission. */
   manualSkills?: string[];
+  /** Read-only project files attached from the local Code workspace for this turn. */
+  codeContext?: TCodeContext;
 };
 
 export type EventSubmission = Omit<TSubmission, 'initialResponse'> & { initialResponse: TMessage };

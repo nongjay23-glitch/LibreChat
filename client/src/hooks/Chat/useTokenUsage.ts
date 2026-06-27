@@ -264,7 +264,8 @@ export default function useTokenUsage({
 
     if (effective != null) {
       const breakdown = effective.breakdown;
-      const maxTokens = effective.contextBudget ?? breakdown.maxContextTokens;
+      const maxTokens =
+        limits.maxContextTokens ?? effective.contextBudget ?? breakdown.maxContextTokens;
       const instructionTokens = effective.effectiveInstructionTokens ?? breakdown.instructionTokens;
       const baseUsed =
         effective.remainingContextTokens != null
