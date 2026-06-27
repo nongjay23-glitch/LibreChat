@@ -317,6 +317,11 @@ const pendingCodeContextByConvoId = atomFamily<TCodeContext | null, string>({
   default: null,
 });
 
+const pendingWorkspacePatchByIndex = atomFamily<string | null, string | number | null>({
+  key: 'pendingWorkspacePatchByIndex',
+  default: null,
+});
+
 const globalAudioURLFamily = atomFamily<string | null, string | number | null>({
   key: 'globalAudioURLByIndex',
   default: null,
@@ -484,5 +489,6 @@ export default {
   pendingManualSkillsByConvoId,
   pendingQuotesByConvoId,
   pendingCodeContextByConvoId,
+  pendingWorkspacePatchByIndex,
   updateConversationSelector,
 };

@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
-import { useRecoilValue, useSetRecoilState } from 'recoil';
+import { useRecoilState, useRecoilValue, useSetRecoilState } from 'recoil';
 import { Constants, request } from 'librechat-data-provider';
 import {
   MAX_CODE_CONTEXT_BYTES,
@@ -208,6 +208,9 @@ export default function CodePanel() {
   const setPendingCodeContext = useSetRecoilState(
     store.pendingCodeContextByConvoId(conversationId),
   );
+  const [pendingWorkspacePatch, setPendingWorkspacePatch] = useRecoilState(
+    store.pendingWorkspacePatchByIndex(0),
+  );
 
   const pathParts = useMemo(() => currentPath.split('/').filter(Boolean), [currentPath]);
   const selectedContextText = useMemo(
@@ -275,6 +278,16 @@ export default function CodePanel() {
       .then(() => loadTree(''))
       .catch((err) => setError(err instanceof Error ? err.message : 'โหลด workspace ไม่สำเร็จ'));
   }, [loadStatus, loadTree]);
+
+  useEffect(() => {
+    if (!pendingWorkspacePatch) {
+      return;
+    }
+    setPatchText(pendingWorkspacePatch);
+    setApplyState('idle');
+    setApplyMessage(null);
+    setPendingWorkspacePatch(null);
+  }, [pendingWorkspacePatch, setPendingWorkspacePatch]);
 
   const goToCrumb = (index: number) => {
     const nextPath = pathParts.slice(0, index + 1).join('/');
