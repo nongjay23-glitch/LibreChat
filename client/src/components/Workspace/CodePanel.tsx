@@ -645,6 +645,7 @@ export default function CodePanel() {
 
       {activeCodeSection === 'files' && (
         <>
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
       <div className="rounded-lg border border-border-light p-3">
         <div className="mb-3 flex items-center justify-between gap-2">
           <div>
@@ -681,7 +682,7 @@ export default function CodePanel() {
           ))}
         </div>
 
-        <div className="max-h-64 space-y-1 overflow-y-auto">
+        <div className="max-h-[24rem] space-y-1 overflow-y-auto">
           {isLoadingTree && <div className="py-6 text-center text-xs text-text-secondary">กำลังโหลดไฟล์...</div>}
           {!isLoadingTree &&
             items.map((item) => (
@@ -754,11 +755,13 @@ export default function CodePanel() {
           </button>
         </div>
 
-        <pre className="max-h-72 overflow-auto rounded-md bg-black/20 p-3 text-xs leading-5 text-text-primary">
+        <pre className="max-h-[24rem] min-h-40 overflow-auto rounded-md bg-black/20 p-3 text-xs leading-5 text-text-primary">
           {isLoadingFile ? 'กำลังอ่านไฟล์...' : selectedFile?.content || 'ยังไม่ได้เลือกไฟล์'}
         </pre>
       </div>
+      </div>
 
+      {(selectedContextFiles.length > 0 || contextState === 'limit') && (
       <div className="rounded-lg border border-border-light p-3">
         <button
           type="button"
@@ -845,6 +848,7 @@ export default function CodePanel() {
           </>
         )}
       </div>
+      )}
 
         </>
       )}
