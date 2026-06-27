@@ -3,7 +3,7 @@ FROM node:24.16.0-bookworm-slim
 ARG NODE_MAX_OLD_SPACE_SIZE=6144
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+  && apt-get install -y --no-install-recommends python3 make g++ git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

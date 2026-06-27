@@ -30,6 +30,7 @@ type WorkspaceStatus = {
   rootLabel: string;
   mode: string;
   maxReadBytes: number;
+  canApplyPatches?: boolean;
 };
 
 type WorkspaceItem = {
@@ -183,6 +184,10 @@ export default function CodePanel() {
     'idle' | 'added' | 'limit' | 'attached' | 'copied'
   >('idle');
   const [patchText, setPatchText] = useState('');
+  const [applyState, setApplyState] = useState<'idle' | 'applying' | 'applied' | 'failed'>(
+    'idle',
+  );
+  const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(0));
   const conversationId = useRecoilValue(store.conversationIdByIndex(0)) ?? Constants.NEW_CONVO;
   const setPendingCodeContext = useSetRecoilState(
@@ -203,6 +208,12 @@ export default function CodePanel() {
     [selectedContextFiles],
   );
   const patchPreview = useMemo(() => parseUnifiedDiff(patchText), [patchText]);
+  const canApplyPatch =
+    Boolean(status?.canApplyPatches) &&
+    patchText.trim().length > 0 &&
+    patchPreview.files.length > 0 &&
+    !patchPreview.hasWarnings &&
+    applyState !== 'applying';
 
   const loadStatus = useCallback(async () => {
     const data = (await request.get('/api/workspace/status')) as WorkspaceStatus;
@@ -333,6 +344,33 @@ export default function CodePanel() {
       setContextState('copied');
     } catch {
       setContextState('idle');
+    }
+  };
+
+  const applyPatch = async () => {
+    if (!canApplyPatch) {
+      return;
+    }
+
+    setApplyState('applying');
+    setApplyMessage(null);
+    try {
+      const data = (await request.post('/api/workspace/apply-patch', {
+        patch: patchText,
+      })) as { applied: boolean; files: string[]; checkpoint?: string | null };
+      setApplyState(data.applied ? 'applied' : 'failed');
+      setApplyMessage(
+        data.checkpoint
+          ? `Applied ${data.files.length} files. Checkpoint: ${data.checkpoint}`
+          : `Applied ${data.files.length} files.`,
+      );
+      await loadTree(currentPath);
+      if (selectedFile) {
+        await loadFile(selectedFile.path);
+      }
+    } catch (err) {
+      setApplyState('failed');
+      setApplyMessage(err instanceof Error ? err.message : 'Apply patch failed');
     }
   };
 
@@ -571,12 +609,28 @@ export default function CodePanel() {
         <textarea
           className="min-h-40 w-full resize-y rounded-md border border-border-light bg-black/20 p-3 font-mono text-xs leading-5 text-text-primary outline-none focus:border-orange-500"
           value={patchText}
-          onChange={(event) => setPatchText(event.target.value)}
-          placeholder={`diff --git a/client/src/example.tsx b/client/src/example.tsx\n--- a/client/src/example.tsx\n+++ b/client/src/example.tsx\n@@ -1,3 +1,3 @@\n-old line\n+new line`}
+          onChange={(event) => {
+            setPatchText(event.target.value);
+            setApplyState('idle');
+            setApplyMessage(null);
+          }}
+          placeholder="Paste unified diff/patch here"
           spellCheck={false}
         />
 
         <div className="mt-3 space-y-2">
+          {applyMessage != null && (
+            <div
+              className={`rounded-md border p-2 text-xs leading-5 ${
+                applyState === 'failed'
+                  ? 'border-red-500/30 bg-red-500/10 text-red-500'
+                  : 'border-green-500/30 bg-green-500/10 text-green-500'
+              }`}
+            >
+              {applyMessage}
+            </div>
+          )}
+
           {patchPreview.warnings.map((warning) => (
             <div
               key={warning}
@@ -624,17 +678,30 @@ export default function CodePanel() {
               type="button"
               className="rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
               disabled={patchText.length === 0}
-              onClick={() => setPatchText('')}
+              onClick={() => {
+                setPatchText('');
+                setApplyState('idle');
+                setApplyMessage(null);
+              }}
             >
               Clear diff
             </button>
             <button
               type="button"
-              className="rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary opacity-60"
-              disabled
-              title="Apply จะเปิดหลังเพิ่ม backend write safety และ checkpoint อัตโนมัติ"
+              className="rounded-md border border-orange-500/50 px-3 py-2 text-xs font-medium text-orange-500 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-border-light disabled:text-text-secondary disabled:opacity-60"
+              disabled={!canApplyPatch}
+              onClick={applyPatch}
+              title={
+                status?.canApplyPatches
+                  ? 'Apply patch after preview passes with no warnings'
+                  : 'Backend write workspace is not enabled'
+              }
             >
-              Apply changes locked
+              {applyState === 'applying'
+                ? 'Applying...'
+                : applyState === 'applied'
+                  ? 'Applied'
+                  : 'Apply changes'}
             </button>
           </div>
         </div>
