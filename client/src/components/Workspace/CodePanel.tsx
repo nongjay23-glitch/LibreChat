@@ -71,6 +71,8 @@ type CheckpointCleanupResponse = {
   deleted: string[];
 };
 
+type CodeSection = 'files' | 'changes' | 'history';
+
 type DiffFileSummary = {
   path: string;
   added: number;
@@ -96,6 +98,12 @@ const getRequestErrorMessage = (err: unknown, fallback: string) => {
 
 const formatCheckpointId = (checkpointId: string) =>
   checkpointId.replace('T', ' ').replace(/-\d{3}Z$/, 'Z');
+
+const CODE_SECTIONS: Array<{ id: CodeSection; label: string }> = [
+  { id: 'files', label: 'Files' },
+  { id: 'changes', label: 'Changes' },
+  { id: 'history', label: 'History' },
+];
 
 const getDiffPath = (rawPath: string) =>
   rawPath
@@ -207,6 +215,7 @@ const parseUnifiedDiff = (patchText: string) => {
 
 export default function CodePanel() {
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
+  const [activeCodeSection, setActiveCodeSection] = useState<CodeSection>('files');
   const [currentPath, setCurrentPath] = useState('');
   const [items, setItems] = useState<WorkspaceItem[]>([]);
   const [selectedFile, setSelectedFile] = useState<WorkspaceFileResponse | null>(null);
@@ -542,12 +551,37 @@ export default function CodePanel() {
           <Code2 className="h-5 w-5 text-orange-500" aria-hidden="true" />
           <h2 className="text-base font-semibold">Code</h2>
         </div>
-        <p className="text-sm leading-5 text-text-secondary">
+        <p className="hidden">
           โหมดนี้เปิดให้ดูไฟล์โปรเจกต์แบบ read-only เพื่อเลือก context ไปคุยกับ AI
           ก่อน ยังไม่มีสิทธิ์เขียนไฟล์ ลบไฟล์ ย้ายไฟล์ หรือรัน terminal จากหน้าเว็บ
         </p>
       </div>
 
+      <div className="rounded-lg border border-border-light bg-surface-primary p-1">
+        <div className="grid grid-cols-3 gap-1">
+          {CODE_SECTIONS.map((section) => (
+            <button
+              key={section.id}
+              type="button"
+              className={`rounded-md px-3 py-2 text-xs font-medium transition-colors ${
+                activeCodeSection === section.id
+                  ? 'bg-surface-hover text-text-primary'
+                  : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
+              }`}
+              onClick={() => setActiveCodeSection(section.id)}
+            >
+              {section.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 rounded-md border border-green-500/20 bg-green-500/5 px-3 py-2 text-xs text-text-secondary">
+        <ShieldCheck className="h-4 w-4 shrink-0 text-green-500" aria-hidden="true" />
+        <span>Read-only workspace, protected paths, diff review before writes.</span>
+      </div>
+
+      {false && (
       <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-3">
         <div className="flex items-start gap-2">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-green-500" aria-hidden="true" />
@@ -560,6 +594,7 @@ export default function CodePanel() {
           </div>
         </div>
       </div>
+      )}
 
       {error != null && (
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs leading-5 text-red-500">
@@ -570,6 +605,8 @@ export default function CodePanel() {
         </div>
       )}
 
+      {activeCodeSection === 'files' && (
+        <>
       <div className="rounded-lg border border-border-light p-3">
         <div className="mb-3 flex items-center justify-between gap-2">
           <div>
@@ -756,6 +793,10 @@ export default function CodePanel() {
         </div>
       </div>
 
+        </>
+      )}
+
+      {activeCodeSection === 'changes' && (
       <div className="rounded-lg border border-border-light p-3">
         <div className="mb-3">
           <div className="flex items-center gap-2 font-medium text-text-primary">
@@ -918,7 +959,9 @@ export default function CodePanel() {
           )}
         </div>
       </div>
+      )}
 
+      {activeCodeSection === 'history' && (
       <div className="rounded-lg border border-border-light p-3">
         <div className="mb-3">
           <div className="flex items-center gap-2 font-medium text-text-primary">
@@ -1024,6 +1067,9 @@ export default function CodePanel() {
         )}
       </div>
 
+      )}
+
+      {false && (
       <div className="rounded-lg border border-border-light p-3 text-xs leading-5 text-text-secondary">
         <div className="mb-1 flex items-center gap-2 font-medium text-text-primary">
           <Lock className="h-4 w-4" aria-hidden="true" />
@@ -1032,6 +1078,7 @@ export default function CodePanel() {
         รอบนี้เป็น read-only เท่านั้น ขั้นต่อไปถ้าจะให้ AI แก้ไฟล์จริง จะต้องมีหน้า diff
         และปุ่มยืนยันก่อนเขียนไฟล์
       </div>
+      )}
     </section>
   );
 }
