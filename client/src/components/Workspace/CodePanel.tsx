@@ -73,6 +73,19 @@ type CheckpointCleanupResponse = {
 
 type CodeSection = 'files' | 'changes' | 'history';
 
+type WorkspaceActivity = {
+  id: string;
+  timestamp: string;
+  type: string;
+  status: string;
+  summary: string;
+  files?: string[];
+};
+
+type WorkspaceActivityResponse = {
+  activities: WorkspaceActivity[];
+};
+
 type DiffFileSummary = {
   path: string;
   added: number;
@@ -244,6 +257,8 @@ export default function CodePanel() {
     'idle' | 'cleaning' | 'deleting' | 'done' | 'failed'
   >('idle');
   const [checkpointActionMessage, setCheckpointActionMessage] = useState<string | null>(null);
+  const [activities, setActivities] = useState<WorkspaceActivity[]>([]);
+  const [isLoadingActivity, setIsLoadingActivity] = useState(false);
   const setActivePrompt = useSetRecoilState(store.activePromptByIndex(0));
   const conversationId = useRecoilValue(store.conversationIdByIndex(0)) ?? Constants.NEW_CONVO;
   const setPendingCodeContext = useSetRecoilState(
@@ -355,9 +370,22 @@ export default function CodePanel() {
     }
   }, []);
 
+  const loadActivity = useCallback(async () => {
+    setIsLoadingActivity(true);
+    try {
+      const data = (await request.get('/api/workspace/activity')) as WorkspaceActivityResponse;
+      setActivities(data.activities);
+    } catch {
+      setActivities([]);
+    } finally {
+      setIsLoadingActivity(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadCheckpoints();
-  }, [loadCheckpoints]);
+    void loadActivity();
+  }, [loadActivity, loadCheckpoints]);
 
   const goToCrumb = (index: number) => {
     const nextPath = pathParts.slice(0, index + 1).join('/');
@@ -474,6 +502,7 @@ export default function CodePanel() {
         await loadFile(selectedFile.path);
       }
       await loadCheckpoints();
+      await loadActivity();
     } catch (err) {
       setApplyState('failed');
       setApplyMessage(getRequestErrorMessage(err, 'Apply patch failed'));
@@ -494,6 +523,7 @@ export default function CodePanel() {
       setCheckpointActionState('done');
       setCheckpointActionMessage(`Kept latest ${data.keep}, deleted ${data.deleted.length} checkpoints.`);
       await loadCheckpoints();
+      await loadActivity();
     } catch (err) {
       setCheckpointActionState('failed');
       setCheckpointActionMessage(getRequestErrorMessage(err, 'Checkpoint cleanup failed'));
@@ -512,6 +542,7 @@ export default function CodePanel() {
       setCheckpointActionState('done');
       setCheckpointActionMessage('Deleted checkpoint.');
       await loadCheckpoints();
+      await loadActivity();
     } catch (err) {
       setCheckpointActionState('failed');
       setCheckpointActionMessage(getRequestErrorMessage(err, 'Delete checkpoint failed'));
@@ -538,6 +569,7 @@ export default function CodePanel() {
         await loadFile(selectedFile.path);
       }
       await loadCheckpoints();
+      await loadActivity();
     } catch (err) {
       setRestoreState('failed');
       setRestoreMessage(getRequestErrorMessage(err, 'Restore checkpoint failed'));
@@ -962,6 +994,58 @@ export default function CodePanel() {
       )}
 
       {activeCodeSection === 'history' && (
+      <>
+      <div className="rounded-lg border border-border-light p-3">
+        <div className="mb-3">
+          <div className="flex items-center gap-2 font-medium text-text-primary">
+            <History className="h-4 w-4 text-orange-500" aria-hidden="true" />
+            Activity
+          </div>
+          <div className="mt-1 text-xs leading-5 text-text-secondary">
+            บันทึกงานล่าสุดของ Code เช่น apply, restore, delete และ cleanup
+          </div>
+        </div>
+
+        {isLoadingActivity ? (
+          <div className="rounded-md bg-black/20 p-3 text-xs text-text-secondary">
+            Loading activity...
+          </div>
+        ) : activities.length > 0 ? (
+          <div className="max-h-48 space-y-2 overflow-y-auto">
+            {activities.slice(0, 8).map((activity) => (
+              <div
+                key={activity.id}
+                className="rounded-md border border-border-light px-3 py-2 text-xs"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate font-medium text-text-primary">
+                      {activity.summary}
+                    </div>
+                    <div className="mt-1 text-text-secondary">
+                      {new Date(activity.timestamp).toLocaleString()} · {activity.type}
+                    </div>
+                  </div>
+                  <span className="shrink-0 rounded border border-green-500/30 px-2 py-0.5 text-[11px] text-green-500">
+                    {activity.status}
+                  </span>
+                </div>
+                {activity.files != null && activity.files.length > 0 && (
+                  <div className="mt-2 truncate text-text-secondary">
+                    {activity.files.slice(0, 2).join(', ')}
+                    {activity.files.length > 2 ? ` +${activity.files.length - 2}` : ''}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-md bg-black/20 p-3 text-xs text-text-secondary">
+            No activity yet
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg border border-border-light p-3">
         <div className="mb-3">
           <div className="flex items-center gap-2 font-medium text-text-primary">
@@ -1067,6 +1151,7 @@ export default function CodePanel() {
         )}
       </div>
 
+      </>
       )}
 
       {false && (

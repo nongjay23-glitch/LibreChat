@@ -16,6 +16,8 @@ const MAX_PATCH_FILES = 20;
 const DEFAULT_CHECKPOINT_KEEP = 5;
 const MAX_CHECKPOINT_KEEP = 50;
 const CHECKPOINT_DIR = '.workspace-checkpoints';
+const ACTIVITY_FILE = '.workspace-activity.jsonl';
+const MAX_ACTIVITY_ITEMS = 50;
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_READONLY_ROOT || '/readonly-workspace');
 const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
   ? path.resolve(process.env.WORKSPACE_WRITE_ROOT)
@@ -294,6 +296,52 @@ async function deleteCheckpoint(checkpointId) {
   return checkpointId;
 }
 
+function getActivityPath() {
+  if (!WORKSPACE_WRITE_ROOT) {
+    throw new Error('Workspace write root is not configured.');
+  }
+  return path.join(WORKSPACE_WRITE_ROOT, ACTIVITY_FILE);
+}
+
+async function writeActivity(entry) {
+  if (!WORKSPACE_WRITE_ROOT) {
+    return;
+  }
+
+  const activity = {
+    id: new Date().toISOString().replace(/[:.]/g, '-'),
+    timestamp: new Date().toISOString(),
+    status: 'success',
+    ...entry,
+  };
+  await fs.appendFile(getActivityPath(), `${JSON.stringify(activity)}\n`, 'utf8').catch(() => {});
+}
+
+async function readActivities(limit = MAX_ACTIVITY_ITEMS) {
+  if (!WORKSPACE_WRITE_ROOT) {
+    return [];
+  }
+
+  const raw = await fs.readFile(getActivityPath(), 'utf8').catch(() => '');
+  if (!raw.trim()) {
+    return [];
+  }
+
+  return raw
+    .trim()
+    .split(/\r?\n/)
+    .slice(-limit)
+    .reverse()
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
 router.get('/status', async (_req, res) => {
   try {
     const stats = await fs.stat(WORKSPACE_ROOT);
@@ -327,6 +375,15 @@ router.get('/checkpoints', async (_req, res, next) => {
   }
 });
 
+router.get('/activity', async (_req, res, next) => {
+  try {
+    const activities = await readActivities();
+    return res.json({ activities });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post('/checkpoints/cleanup', async (req, res) => {
   try {
     if (!WORKSPACE_WRITE_ROOT) {
@@ -345,6 +402,12 @@ router.post('/checkpoints/cleanup', async (req, res) => {
       deleted.push(await deleteCheckpoint(checkpoint.checkpointId));
     }
 
+    await writeActivity({
+      type: 'checkpoint_cleanup',
+      summary: `Kept latest ${keep} checkpoints`,
+      details: { keep, deleted },
+    });
+
     return res.json({ keep, deleted });
   } catch (error) {
     const message = error?.message || 'Checkpoint cleanup failed.';
@@ -359,6 +422,11 @@ router.delete('/checkpoints/:checkpointId', async (req, res) => {
     }
 
     const checkpointId = await deleteCheckpoint(req.params.checkpointId);
+    await writeActivity({
+      type: 'checkpoint_delete',
+      summary: `Deleted checkpoint ${checkpointId}`,
+      details: { checkpointId },
+    });
     return res.json({ deleted: true, checkpointId });
   } catch (error) {
     const message = error?.message || 'Delete checkpoint failed.';
@@ -471,6 +539,12 @@ router.post('/apply-patch', async (req, res, next) => {
     await git(['apply', '--check', '--whitespace=nowarn', patchFile]);
     const checkpoint = await createFileCheckpoint(parsed.files, parsed.createdFiles);
     await git(['apply', '--whitespace=nowarn', patchFile]);
+    await writeActivity({
+      type: 'apply_patch',
+      summary: `Applied ${parsed.files.length} files`,
+      files: parsed.files,
+      details: { checkpoint, createdFiles: parsed.createdFiles },
+    });
 
     return res.json({
       applied: true,
@@ -516,6 +590,13 @@ router.post('/restore-checkpoint', async (req, res) => {
       await fs.rm(resolved, { force: true });
       removedFiles.push(normalized);
     }
+
+    await writeActivity({
+      type: 'restore_checkpoint',
+      summary: `Restored checkpoint ${checkpointId}`,
+      files: restoredFiles,
+      details: { checkpointId, removedFiles },
+    });
 
     return res.json({
       restored: true,
