@@ -11,6 +11,7 @@ import {
   Lock,
   RefreshCw,
   RotateCcw,
+  Search,
   Send,
   ShieldCheck,
   Trash2,
@@ -250,6 +251,7 @@ export default function CodePanel() {
   const [activeCodeSection, setActiveCodeSection] = useState<CodeSection>('files');
   const [currentPath, setCurrentPath] = useState('');
   const [items, setItems] = useState<WorkspaceItem[]>([]);
+  const [fileSearch, setFileSearch] = useState('');
   const [selectedFile, setSelectedFile] = useState<WorkspaceFileResponse | null>(null);
   const [selectedContextFiles, setSelectedContextFiles] = useState<WorkspaceFileResponse[]>([]);
   const [isLoadingTree, setIsLoadingTree] = useState(false);
@@ -292,6 +294,16 @@ export default function CodePanel() {
   );
 
   const pathParts = useMemo(() => currentPath.split('/').filter(Boolean), [currentPath]);
+  const normalizedFileSearch = fileSearch.trim().toLowerCase();
+  const filteredItems = useMemo(
+    () =>
+      normalizedFileSearch
+        ? items.filter((item) =>
+            `${item.name} ${item.path}`.toLowerCase().includes(normalizedFileSearch),
+          )
+        : items,
+    [items, normalizedFileSearch],
+  );
   const selectedContextText = useMemo(
     () => createCombinedCodeContextSnippet(selectedContextFiles),
     [selectedContextFiles],
@@ -339,6 +351,7 @@ export default function CodePanel() {
       )) as WorkspaceTreeResponse;
       setCurrentPath(data.path);
       setItems(data.items);
+      setFileSearch('');
       setSelectedFile(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'โหลดรายการไฟล์ไม่สำเร็จ');
@@ -706,10 +719,34 @@ export default function CodePanel() {
           ))}
         </div>
 
+        <div className="mb-3 flex items-center gap-2 rounded-md border border-border-light px-2 py-2">
+          <Search className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
+          <input
+            type="search"
+            value={fileSearch}
+            onChange={(event) => setFileSearch(event.target.value)}
+            placeholder="Search files in this folder"
+            className="min-w-0 flex-1 bg-transparent text-sm text-text-primary outline-none placeholder:text-text-secondary"
+            aria-label="Search workspace files"
+          />
+          <span className="shrink-0 text-xs text-text-secondary">
+            {filteredItems.length}/{items.length}
+          </span>
+          {fileSearch.trim().length > 0 && (
+            <button
+              type="button"
+              className="shrink-0 text-xs text-text-secondary hover:text-text-primary"
+              onClick={() => setFileSearch('')}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
         <div className="max-h-[24rem] space-y-1 overflow-y-auto">
           {isLoadingTree && <div className="py-6 text-center text-xs text-text-secondary">กำลังโหลดไฟล์...</div>}
           {!isLoadingTree &&
-            items.map((item) => (
+            filteredItems.map((item) => (
               <button
                 key={item.path}
                 type="button"
@@ -728,6 +765,11 @@ export default function CodePanel() {
             ))}
           {!isLoadingTree && items.length === 0 && (
             <div className="py-6 text-center text-xs text-text-secondary">ไม่พบไฟล์ที่เปิดให้ดูใน path นี้</div>
+          )}
+          {!isLoadingTree && items.length > 0 && filteredItems.length === 0 && (
+            <div className="py-6 text-center text-xs text-text-secondary">
+              No files match this search
+            </div>
           )}
         </div>
       </div>
