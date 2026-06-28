@@ -189,6 +189,7 @@ const ContentRender = memo(function ContentRender({
         baseClasses.chat,
         conditionalClasses.focus,
         'message-render',
+        msg.isCreatedByUser && !hasParallelContent && 'flex-row-reverse',
       )}
     >
       {!hasParallelContent && (
@@ -204,18 +205,32 @@ const ContentRender = memo(function ContentRender({
           'relative flex flex-col',
           hasParallelContent ? 'w-full' : 'w-11/12',
           msg.isCreatedByUser ? 'user-turn' : 'agent-turn',
+          msg.isCreatedByUser && !hasParallelContent && 'items-end',
         )}
       >
         {!hasParallelContent && (
-          <h2 className={cn('select-none font-semibold', fontSize)}>
+          <h2
+            className={cn(
+              'select-none font-semibold',
+              fontSize,
+              msg.isCreatedByUser && 'text-right',
+            )}
+          >
             <span className="sr-only">{getHeaderPrefixForScreenReader(msg, localize)}</span>
             {messageLabel}
             <MessageTimestamp value={msg.createdAt ?? msg.clientTimestamp} />
           </h2>
         )}
 
-        <div className="flex flex-col gap-1">
-          <div className="flex min-h-[20px] max-w-full flex-grow flex-col gap-0">
+        <div className={cn('flex flex-col gap-1', msg.isCreatedByUser && 'items-end')}>
+          <div
+            className={cn(
+              'flex min-h-[20px] max-w-full flex-col gap-0',
+              msg.isCreatedByUser && !hasParallelContent
+                ? 'w-fit max-w-[85%] rounded-2xl rounded-tr-md border border-orange-500/30 bg-orange-500/10 px-4 py-2 text-left shadow-sm'
+                : 'flex-grow',
+            )}
+          >
             <ContentParts
               edit={edit}
               isLast={isLast}

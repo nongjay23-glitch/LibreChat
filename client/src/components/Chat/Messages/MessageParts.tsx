@@ -113,6 +113,7 @@ export default function Message(props: TMessageProps) {
               baseClasses.chat,
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-xheavy',
               'message-render',
+              isCreatedByUser && !hasParallelContent && 'flex-row-reverse',
             )}
           >
             {!hasParallelContent && (
@@ -127,10 +128,17 @@ export default function Message(props: TMessageProps) {
                 'relative flex flex-col',
                 hasParallelContent ? 'w-full' : 'w-11/12',
                 isCreatedByUser ? 'user-turn' : 'agent-turn',
+                isCreatedByUser && !hasParallelContent && 'items-end',
               )}
             >
               {!hasParallelContent && (
-                <h2 className={cn('select-none font-semibold text-text-primary', fontSize)}>
+                <h2
+                  className={cn(
+                    'select-none font-semibold text-text-primary',
+                    fontSize,
+                    isCreatedByUser && 'text-right',
+                  )}
+                >
                   <span className="sr-only">
                     {getHeaderPrefixForScreenReader(message, localize)}
                   </span>
@@ -138,8 +146,15 @@ export default function Message(props: TMessageProps) {
                   <MessageTimestamp value={message.createdAt ?? message.clientTimestamp} />
                 </h2>
               )}
-              <div className="flex flex-col gap-1">
-                <div className="flex min-h-[20px] max-w-full flex-grow flex-col gap-0">
+              <div className={cn('flex flex-col gap-1', isCreatedByUser && 'items-end')}>
+                <div
+                  className={cn(
+                    'flex min-h-[20px] max-w-full flex-col gap-0',
+                    isCreatedByUser && !hasParallelContent
+                      ? 'w-fit max-w-[85%] rounded-2xl rounded-tr-md border border-orange-500/30 bg-orange-500/10 px-4 py-2 text-left shadow-sm'
+                      : 'flex-grow',
+                  )}
+                >
                   <ContentParts
                     edit={edit}
                     isLast={isLast}
