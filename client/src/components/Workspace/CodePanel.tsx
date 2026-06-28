@@ -109,6 +109,25 @@ const getRequestErrorMessage = (err: unknown, fallback: string) => {
   return fallback;
 };
 
+const getPatchApplyMessage = (err: unknown) => {
+  const message = getRequestErrorMessage(err, 'Apply patch failed');
+  const lowerMessage = message.toLowerCase();
+
+  if (lowerMessage.includes('patch does not apply')) {
+    return 'Patch ใช้ไม่ได้กับไฟล์ปัจจุบันแล้ว ไฟล์น่าจะเปลี่ยนไปหลังจาก AI สร้าง diff ให้เปิดไฟล์ล่าสุดแล้วขอ AI สร้าง unified diff ใหม่';
+  }
+
+  if (lowerMessage.includes('already exists in working directory')) {
+    return 'Patch ต้องการสร้างไฟล์ใหม่ แต่มีไฟล์ชื่อนี้อยู่แล้ว ให้ขอ AI สร้าง diff แบบแก้ไฟล์เดิม หรือเปลี่ยนชื่อไฟล์ใหม่';
+  }
+
+  if (lowerMessage.includes('outside workspace') || lowerMessage.includes('blocked')) {
+    return 'Patch ถูกบล็อกเพื่อความปลอดภัย เพราะพยายามแก้ไฟล์นอก workspace หรือไฟล์ที่ระบบไม่อนุญาต';
+  }
+
+  return message;
+};
+
 const formatCheckpointId = (checkpointId: string) =>
   checkpointId.replace('T', ' ').replace(/-\d{3}Z$/, 'Z');
 
@@ -300,6 +319,7 @@ export default function CodePanel() {
     patchText.trim().length > 0 &&
     patchPreview.files.length > 0 &&
     !patchPreview.hasWarnings &&
+    applyState !== 'applied' &&
     applyState !== 'applying';
 
   const loadStatus = useCallback(async () => {
@@ -499,8 +519,8 @@ export default function CodePanel() {
       setApplyState(data.applied ? 'applied' : 'failed');
       setApplyMessage(
         data.checkpoint
-          ? `Applied ${data.files.length} files. Checkpoint: ${data.checkpoint}`
-          : `Applied ${data.files.length} files.`,
+          ? `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์ มี checkpoint: ${data.checkpoint}`
+          : `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์`,
       );
       await loadTree(currentPath);
       if (selectedFile) {
@@ -510,7 +530,7 @@ export default function CodePanel() {
       await loadActivity();
     } catch (err) {
       setApplyState('failed');
-      setApplyMessage(getRequestErrorMessage(err, 'Apply patch failed'));
+      setApplyMessage(getPatchApplyMessage(err));
     }
   };
 
@@ -879,6 +899,25 @@ export default function CodePanel() {
         />
 
         <div className="mt-3 space-y-2">
+          {patchPreview.files.length > 0 && (
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="rounded-md border border-border-light p-2">
+                <div className="text-text-secondary">Files</div>
+                <div className="mt-1 font-semibold text-text-primary">
+                  {patchPreview.files.length}
+                </div>
+              </div>
+              <div className="rounded-md border border-border-light p-2">
+                <div className="text-text-secondary">Add</div>
+                <div className="mt-1 font-semibold text-green-500">+{patchTotals.added}</div>
+              </div>
+              <div className="rounded-md border border-border-light p-2">
+                <div className="text-text-secondary">Remove</div>
+                <div className="mt-1 font-semibold text-red-500">-{patchTotals.removed}</div>
+              </div>
+            </div>
+          )}
+
           {applyMessage != null && (
             <div
               className={`rounded-md border p-2 text-xs leading-5 ${
