@@ -499,7 +499,6 @@ export default function CodePanel() {
 
     setSelectedContextFiles(nextFiles);
     setContextState('added');
-    setIsSelectedContextOpen(true);
   };
 
   const removeContextFile = (path: string) => {
@@ -517,7 +516,6 @@ export default function CodePanel() {
     if (selectedContextFiles.length === 0) {
       return;
     }
-    setIsSelectedContextOpen(true);
     attachFilesToChat(selectedContextFiles);
   };
 
