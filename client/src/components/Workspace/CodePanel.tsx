@@ -592,12 +592,24 @@ export default function CodePanel() {
     try {
       const data = (await request.post('/api/workspace/apply-patch', {
         patch: patchText,
-      })) as { applied: boolean; files: string[]; checkpoint?: string | null };
+      })) as {
+        applied: boolean;
+        files: string[];
+        checkpoint?: string | null;
+        normalizedPatch?: string;
+      };
+      if (data.normalizedPatch) {
+        setPatchText(data.normalizedPatch);
+      }
       setApplyState(data.applied ? 'applied' : 'failed');
       setApplyMessage(
         data.checkpoint
-          ? `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์ มี checkpoint: ${data.checkpoint}`
-          : `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์`,
+          ? `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์ มี checkpoint: ${data.checkpoint}${
+              data.normalizedPatch ? ' · auto-fixed diff header' : ''
+            }`
+          : `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์${
+              data.normalizedPatch ? ' · auto-fixed diff header' : ''
+            }`,
       );
       await loadTree(currentPath);
       if (selectedFile) {

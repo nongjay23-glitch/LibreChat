@@ -200,6 +200,144 @@ function normalizePatchText(patchText) {
   return normalized.endsWith('\n') ? normalized : `${normalized}\n`;
 }
 
+function formatPatchRange(start, count) {
+  return count === 1 ? String(start) : `${start},${count}`;
+}
+
+function findUniqueLineSequence(fileLines, sequence) {
+  if (sequence.length === 0 || sequence.length > fileLines.length) {
+    return null;
+  }
+
+  let matchedIndex = -1;
+  for (let index = 0; index <= fileLines.length - sequence.length; index++) {
+    const matches = sequence.every((line, offset) => fileLines[index + offset] === line);
+    if (!matches) {
+      continue;
+    }
+    if (matchedIndex !== -1) {
+      return null;
+    }
+    matchedIndex = index;
+  }
+
+  return matchedIndex === -1 ? null : matchedIndex;
+}
+
+function getHunkDetails(lines) {
+  return lines.reduce(
+    (details, line) => {
+      if (line.startsWith('\\')) {
+        return details;
+      }
+      if (line.startsWith(' ')) {
+        details.oldCount += 1;
+        details.newCount += 1;
+        details.oldLines.push(line.slice(1));
+        return details;
+      }
+      if (line.startsWith('-')) {
+        details.oldCount += 1;
+        details.oldLines.push(line.slice(1));
+        return details;
+      }
+      if (line.startsWith('+')) {
+        details.newCount += 1;
+      }
+      return details;
+    },
+    { oldCount: 0, newCount: 0, oldLines: [] },
+  );
+}
+
+async function readWorkspaceTextLines(relativePath) {
+  if (!relativePath || relativePath === '/dev/null') {
+    return null;
+  }
+
+  const { normalized, resolved } = resolveWritableWorkspacePath(relativePath);
+  if (isBlocked(normalized)) {
+    return null;
+  }
+
+  const buffer = await fs.readFile(resolved).catch(() => null);
+  if (!buffer || isLikelyBinary(buffer)) {
+    return null;
+  }
+
+  const text = buffer.toString('utf8');
+  const lines = text.split(/\r?\n/);
+  return text.endsWith('\n') || text.endsWith('\r\n') ? lines.slice(0, -1) : lines;
+}
+
+async function normalizePatchHunks(patchText) {
+  const lines = patchText.split('\n');
+  const hunkPattern = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/;
+  let currentPath = null;
+  let currentFileLines = null;
+  let fileDelta = 0;
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+
+    if (line.startsWith('diff --git ')) {
+      const parts = line.split(/\s+/);
+      currentPath = getDiffPath(parts[3] ?? parts[2] ?? '');
+      currentFileLines = null;
+      fileDelta = 0;
+      continue;
+    }
+
+    if (line.startsWith('+++ ')) {
+      const nextPath = getDiffPath(line.slice(4));
+      currentPath = nextPath === '/dev/null' ? currentPath : nextPath;
+      currentFileLines = null;
+      fileDelta = 0;
+      continue;
+    }
+
+    const hunkMatch = hunkPattern.exec(line);
+    if (!hunkMatch) {
+      continue;
+    }
+
+    let bodyEnd = index + 1;
+    while (
+      bodyEnd < lines.length &&
+      !lines[bodyEnd].startsWith('diff --git ') &&
+      !lines[bodyEnd].startsWith('@@ ')
+    ) {
+      bodyEnd += 1;
+    }
+
+    const hunkLines = lines.slice(index + 1, bodyEnd);
+    const details = getHunkDetails(hunkLines);
+    const originalOldStart = Number(hunkMatch[1]);
+    let oldStart = originalOldStart;
+    let newStart = Number(hunkMatch[3]);
+
+    if (currentPath && details.oldLines.length > 0) {
+      currentFileLines ??= await readWorkspaceTextLines(currentPath);
+      const matchedIndex = currentFileLines
+        ? findUniqueLineSequence(currentFileLines, details.oldLines)
+        : null;
+      if (matchedIndex !== null) {
+        oldStart = matchedIndex + 1;
+        newStart = oldStart + fileDelta;
+      }
+    }
+
+    lines[index] = `@@ -${formatPatchRange(oldStart, details.oldCount)} +${formatPatchRange(
+      newStart,
+      details.newCount,
+    )} @@${hunkMatch[5]}`;
+    fileDelta += details.newCount - details.oldCount;
+    index = bodyEnd - 1;
+  }
+
+  return lines.join('\n');
+}
+
 async function git(args, options = {}) {
   return await execFileAsync('git', args, {
     cwd: WORKSPACE_WRITE_ROOT,
@@ -519,7 +657,8 @@ router.post('/apply-patch', async (req, res, next) => {
       return res.status(413).json({ message: 'Patch is too large for safe apply.' });
     }
 
-    const parsed = parsePatchFiles(patchText);
+    const normalizedPatchText = await normalizePatchHunks(patchText);
+    const parsed = parsePatchFiles(normalizedPatchText);
     if (parsed.files.length === 0) {
       return res.status(400).json({ message: 'No patch files were found.' });
     }
@@ -534,7 +673,7 @@ router.post('/apply-patch', async (req, res, next) => {
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'workspace-patch-'));
     patchFile = path.join(tempDir, 'change.diff');
-    await fs.writeFile(patchFile, patchText, 'utf8');
+    await fs.writeFile(patchFile, normalizedPatchText, 'utf8');
 
     await git(['apply', '--check', '--whitespace=nowarn', patchFile]);
     const checkpoint = await createFileCheckpoint(parsed.files, parsed.createdFiles);
@@ -550,6 +689,8 @@ router.post('/apply-patch', async (req, res, next) => {
       applied: true,
       files: parsed.files,
       checkpoint,
+      normalizedPatch:
+        normalizedPatchText !== patchText ? normalizedPatchText : undefined,
     });
   } catch (error) {
     const message = error?.stderr || error?.message || 'Patch apply failed.';
