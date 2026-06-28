@@ -336,6 +336,25 @@ export default function CodePanel() {
     !patchPreview.hasWarnings &&
     applyState !== 'applied' &&
     applyState !== 'applying';
+  const patchReviewHint = useMemo(() => {
+    if (patchText.trim().length === 0 || applyState === 'applied') {
+      return null;
+    }
+
+    if (patchPreview.files.length === 0) {
+      return 'ยังไม่พบไฟล์ใน unified diff ต้องมีบรรทัด --- a/file, +++ b/file และ @@ hunk จาก AI';
+    }
+
+    if (patchPreview.hasWarnings) {
+      return 'ยัง apply ไม่ได้ เพราะ diff มี path ที่เสี่ยงหรือถูกบล็อก ตรวจชื่อไฟล์ในรายการด้านล่างก่อน';
+    }
+
+    if (!status?.canApplyPatches) {
+      return 'Backend ยังไม่เปิด Safe writes จึง preview ได้อย่างเดียว ยังเขียนไฟล์จริงไม่ได้';
+    }
+
+    return null;
+  }, [applyState, patchPreview.files.length, patchPreview.hasWarnings, patchText, status?.canApplyPatches]);
 
   const loadStatus = useCallback(async () => {
     const data = (await request.get('/api/workspace/status')) as WorkspaceStatus;
@@ -973,6 +992,12 @@ export default function CodePanel() {
               }`}
             >
               {applyMessage}
+            </div>
+          )}
+
+          {patchReviewHint != null && (
+            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs leading-5 text-yellow-500">
+              {patchReviewHint}
             </div>
           )}
 

@@ -18,8 +18,19 @@ const isPatchLanguage = (lang: string) => ['diff', 'patch'].includes(lang.toLowe
 const FloatingCodeBar: React.FC<FloatingCodeBarProps> = React.memo(
   ({ lang, error, codeRef, blockIndex, plugin = null, allowExecution = true, isVisible }) => {
     const { isCopied, buttonRef, handleCopy } = useCopyCode(codeRef);
+    const [reviewState, setReviewState] = React.useState<'idle' | 'sent'>('idle');
+    const reviewResetRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
     const setPendingWorkspacePatch = useSetRecoilState(store.pendingWorkspacePatchByIndex(0));
     const setSidebarExpanded = useSetRecoilState(store.sidebarExpanded);
+
+    React.useEffect(
+      () => () => {
+        if (reviewResetRef.current) {
+          clearTimeout(reviewResetRef.current);
+        }
+      },
+      [],
+    );
 
     const sendPatchToCode = () => {
       const patchText = codeRef.current?.textContent ?? '';
@@ -29,6 +40,11 @@ const FloatingCodeBar: React.FC<FloatingCodeBarProps> = React.memo(
       setPendingWorkspacePatch(patchText);
       setActivePanelFromOutside('code-workspace');
       setSidebarExpanded(true);
+      setReviewState('sent');
+      if (reviewResetRef.current) {
+        clearTimeout(reviewResetRef.current);
+      }
+      reviewResetRef.current = setTimeout(() => setReviewState('idle'), 1800);
     };
 
     return (
@@ -50,8 +66,14 @@ const FloatingCodeBar: React.FC<FloatingCodeBarProps> = React.memo(
                 type="button"
                 tabIndex={isVisible ? 0 : -1}
                 onClick={sendPatchToCode}
-                aria-label="Review diff in Code"
-                className="inline-flex select-none items-center justify-center rounded-lg p-1.5 text-text-secondary transition-all duration-200 ease-out hover:bg-surface-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-border-heavy"
+                aria-label={
+                  reviewState === 'sent' ? 'Diff sent to Code changes' : 'Review diff in Code'
+                }
+                className={`inline-flex select-none items-center justify-center rounded-lg p-1.5 transition-all duration-200 ease-out hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-border-heavy ${
+                  reviewState === 'sent'
+                    ? 'text-green-500'
+                    : 'text-text-secondary hover:text-text-primary'
+                }`}
               >
                 <Code2 size={18} aria-hidden="true" />
               </button>
