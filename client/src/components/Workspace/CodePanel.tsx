@@ -272,6 +272,9 @@ export default function CodePanel() {
     'idle',
   );
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
+  const [pendingRestoreCheckpointId, setPendingRestoreCheckpointId] = useState<string | null>(
+    null,
+  );
   const [checkpointActionState, setCheckpointActionState] = useState<
     'idle' | 'cleaning' | 'deleting' | 'done' | 'failed'
   >('idle');
@@ -581,6 +584,7 @@ export default function CodePanel() {
 
     setRestoreState('restoring');
     setRestoreMessage(null);
+    setPendingRestoreCheckpointId(null);
     try {
       const data = (await request.post('/api/workspace/restore-checkpoint', {
         checkpointId,
@@ -1180,10 +1184,17 @@ export default function CodePanel() {
                       type="button"
                       className="flex items-center gap-1 rounded-md border border-orange-500/50 px-2 py-1 font-medium text-orange-500 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:border-border-light disabled:text-text-secondary disabled:opacity-60"
                       disabled={!status?.canRestoreCheckpoints || restoreState === 'restoring'}
-                      onClick={() => restoreCheckpoint(checkpoint.checkpointId)}
+                      onClick={() => {
+                        setRestoreMessage(null);
+                        setPendingRestoreCheckpointId(checkpoint.checkpointId);
+                      }}
                     >
                       <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-                      {restoreState === 'restoring' ? 'Restoring...' : 'Restore'}
+                      {restoreState === 'restoring'
+                        ? 'Restoring...'
+                        : pendingRestoreCheckpointId === checkpoint.checkpointId
+                          ? 'Reviewing'
+                          : 'Restore'}
                     </button>
                     <button
                       type="button"
@@ -1205,6 +1216,32 @@ export default function CodePanel() {
                       </div>
                     ))}
                 </div>
+                {pendingRestoreCheckpointId === checkpoint.checkpointId && (
+                  <div className="mt-3 rounded-md border border-orange-500/40 bg-orange-500/10 p-3 text-xs leading-5 text-text-primary">
+                    <div className="font-medium">Restore confirmation</div>
+                    <div className="mt-1 text-text-secondary">
+                      ตรวจอีกครั้งก่อนคืนไฟล์จริง ระบบจะย้อนไฟล์ที่บันทึกไว้ใน checkpoint นี้
+                      และอาจลบไฟล์ที่ patch เดิมสร้างขึ้น
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border border-border-light px-3 py-2 font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                        onClick={() => setPendingRestoreCheckpointId(null)}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md bg-orange-500 px-3 py-2 font-medium text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={restoreState === 'restoring'}
+                        onClick={() => restoreCheckpoint(checkpoint.checkpointId)}
+                      >
+                        Confirm restore
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
           </div>
