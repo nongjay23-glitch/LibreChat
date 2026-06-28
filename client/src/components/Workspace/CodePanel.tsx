@@ -267,6 +267,9 @@ export default function CodePanel() {
     'idle',
   );
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  const [patchPromptCopyState, setPatchPromptCopyState] = useState<
+    'idle' | 'copied' | 'failed'
+  >('idle');
   const [isApplyConfirmVisible, setIsApplyConfirmVisible] = useState(false);
   const [checkpoints, setCheckpoints] = useState<WorkspaceCheckpoint[]>([]);
   const [isLoadingCheckpoints, setIsLoadingCheckpoints] = useState(false);
@@ -355,6 +358,35 @@ export default function CodePanel() {
 
     return null;
   }, [applyState, patchPreview.files.length, patchPreview.hasWarnings, patchText, status?.canApplyPatches]);
+  const patchRetryPrompt = useMemo(() => {
+    const fileList = patchPreview.files.map((file) => `- ${file.path}`).join('\n');
+    const warningList = [
+      ...patchPreview.warnings,
+      ...patchPreview.files.flatMap((file) =>
+        file.warnings.map((warning) => `${file.path}: ${warning}`),
+      ),
+    ].join('\n');
+    const filesText = fileList ? `\n\nไฟล์ที่เกี่ยวข้อง:\n${fileList}` : '';
+    const warningsText = warningList ? `\n\nข้อควรแก้ใน diff เดิม:\n${warningList}` : '';
+    const errorText =
+      applyState === 'failed' && applyMessage ? `\n\nerror ล่าสุด:\n${applyMessage}` : '';
+
+    return [
+      'สร้าง unified diff ใหม่เท่านั้น ห้ามอธิบาย ห้ามเขียนเนื้อหาไฟล์เต็ม',
+      'ให้อ้างอิงจากไฟล์ล่าสุดที่แนบมาในแชท และแก้เฉพาะจุดที่ขอ',
+      'diff ต้องมี header แบบ --- a/path และ +++ b/path พร้อม @@ hunk ที่ถูกต้อง',
+      'ห้ามแก้ไฟล์ลับ เช่น .env, token, password, credential, node_modules, logs, uploads',
+      filesText,
+      warningsText,
+      errorText,
+    ]
+      .filter(Boolean)
+      .join('\n');
+  }, [applyMessage, applyState, patchPreview.files, patchPreview.warnings]);
+  const shouldShowPatchRetryPrompt =
+    patchText.trim().length > 0 &&
+    applyState !== 'applied' &&
+    (applyState === 'failed' || patchPreview.files.length === 0 || patchPreview.hasWarnings);
 
   const loadStatus = useCallback(async () => {
     const data = (await request.get('/api/workspace/status')) as WorkspaceStatus;
@@ -411,6 +443,7 @@ export default function CodePanel() {
     setActiveCodeSection('changes');
     setApplyState('idle');
     setApplyMessage(null);
+    setPatchPromptCopyState('idle');
     setIsApplyConfirmVisible(false);
     setPendingWorkspacePatch(null);
   }, [pendingWorkspacePatch, setPendingWorkspacePatch]);
@@ -531,6 +564,15 @@ export default function CodePanel() {
     }
   };
 
+  const copyPatchRetryPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(patchRetryPrompt);
+      setPatchPromptCopyState('copied');
+    } catch {
+      setPatchPromptCopyState('failed');
+    }
+  };
+
   const applyPatch = async () => {
     if (!canApplyPatch) {
       return;
@@ -539,11 +581,13 @@ export default function CodePanel() {
     if (!isApplyConfirmVisible) {
       setIsApplyConfirmVisible(true);
       setApplyMessage(null);
+      setPatchPromptCopyState('idle');
       return;
     }
 
     setApplyState('applying');
     setApplyMessage(null);
+    setPatchPromptCopyState('idle');
     setIsApplyConfirmVisible(false);
     try {
       const data = (await request.post('/api/workspace/apply-patch', {
@@ -955,6 +999,7 @@ export default function CodePanel() {
             setPatchText(event.target.value);
             setApplyState('idle');
             setApplyMessage(null);
+            setPatchPromptCopyState('idle');
             setIsApplyConfirmVisible(false);
           }}
           placeholder="Paste unified diff/patch here"
@@ -996,6 +1041,31 @@ export default function CodePanel() {
           {patchReviewHint != null && (
             <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs leading-5 text-yellow-500">
               {patchReviewHint}
+            </div>
+          )}
+
+          {shouldShowPatchRetryPrompt && (
+            <div className="rounded-md border border-orange-500/30 bg-orange-500/10 p-2 text-xs leading-5 text-text-primary">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-medium text-orange-500">Diff retry prompt</div>
+                  <div className="mt-1 text-text-secondary">
+                    ใช้เมื่อต้องขอ AI สร้าง unified diff ใหม่จากไฟล์ล่าสุด แทนการเดา line เอง
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-md border border-orange-500/40 px-2 py-1 font-medium text-orange-500 hover:bg-orange-500/10"
+                  onClick={copyPatchRetryPrompt}
+                >
+                  <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                  {patchPromptCopyState === 'copied'
+                    ? 'Copied'
+                    : patchPromptCopyState === 'failed'
+                      ? 'Copy failed'
+                      : 'Copy prompt'}
+                </button>
+              </div>
             </div>
           )}
 
@@ -1050,6 +1120,7 @@ export default function CodePanel() {
                     setPatchText('');
                     setApplyState('idle');
                     setApplyMessage(null);
+                    setPatchPromptCopyState('idle');
                     setIsApplyConfirmVisible(false);
                   }}
                 >
