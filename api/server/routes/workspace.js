@@ -250,6 +250,33 @@ function getHunkDetails(lines) {
   );
 }
 
+function normalizeHunkBodyLines(lines, isLastPatchBlock) {
+  return lines.reduce((normalizedLines, line, index) => {
+    const isFinalEmptyLine = isLastPatchBlock && index === lines.length - 1 && line === '';
+    if (isFinalEmptyLine) {
+      normalizedLines.push(line);
+      return normalizedLines;
+    }
+
+    if (line === '') {
+      return normalizedLines;
+    }
+
+    if (
+      line.startsWith(' ') ||
+      line.startsWith('+') ||
+      line.startsWith('-') ||
+      line.startsWith('\\')
+    ) {
+      normalizedLines.push(line);
+      return normalizedLines;
+    }
+
+    normalizedLines.push(` ${line}`);
+    return normalizedLines;
+  }, []);
+}
+
 async function readWorkspaceTextLines(relativePath) {
   if (!relativePath || relativePath === '/dev/null') {
     return null;
@@ -310,7 +337,12 @@ async function normalizePatchHunks(patchText) {
       bodyEnd += 1;
     }
 
-    const hunkLines = lines.slice(index + 1, bodyEnd);
+    const hunkLines = normalizeHunkBodyLines(
+      lines.slice(index + 1, bodyEnd),
+      bodyEnd === lines.length,
+    );
+    lines.splice(index + 1, bodyEnd - index - 1, ...hunkLines);
+    bodyEnd = index + 1 + hunkLines.length;
     const details = getHunkDetails(hunkLines);
     const originalOldStart = Number(hunkMatch[1]);
     let oldStart = originalOldStart;
