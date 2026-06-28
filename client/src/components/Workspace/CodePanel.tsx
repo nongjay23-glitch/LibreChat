@@ -73,6 +73,7 @@ type CheckpointCleanupResponse = {
 };
 
 type CodeSection = 'files' | 'changes' | 'history';
+type VerificationProfile = 'fast' | 'normal' | 'strict';
 
 type WorkspaceVerificationCheck = {
   name: string;
@@ -171,6 +172,16 @@ const CODE_SECTIONS: Array<{ id: CodeSection; label: string }> = [
   { id: 'files', label: 'Files' },
   { id: 'changes', label: 'Changes' },
   { id: 'history', label: 'History' },
+];
+
+const VERIFICATION_PROFILES: Array<{
+  id: VerificationProfile;
+  label: string;
+  description: string;
+}> = [
+  { id: 'fast', label: 'Fast', description: 'text, syntax, whitespace' },
+  { id: 'normal', label: 'Normal', description: 'Fast + TS syntax when available' },
+  { id: 'strict', label: 'Strict', description: 'Normal + readyz' },
 ];
 
 const getDiffPath = (rawPath: string) =>
@@ -303,6 +314,7 @@ export default function CodePanel() {
   );
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [applyVerification, setApplyVerification] = useState<WorkspaceVerification | null>(null);
+  const [verificationProfile, setVerificationProfile] = useState<VerificationProfile>('fast');
   const [patchPromptCopyState, setPatchPromptCopyState] = useState<
     'idle' | 'copied' | 'failed'
   >('idle');
@@ -630,6 +642,7 @@ export default function CodePanel() {
     try {
       const data = (await request.post('/api/workspace/apply-patch', {
         patch: patchText,
+        verificationProfile,
       })) as {
         applied: boolean;
         files: string[];
@@ -1080,6 +1093,37 @@ export default function CodePanel() {
               <div className="rounded-md border border-border-light p-2">
                 <div className="text-text-secondary">Remove</div>
                 <div className="mt-1 font-semibold text-red-500">-{patchTotals.removed}</div>
+              </div>
+            </div>
+          )}
+
+          {patchPreview.files.length > 0 && (
+            <div className="rounded-md border border-border-light p-2 text-xs">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="font-medium text-text-primary">Verification</div>
+                <div className="text-text-secondary">หลัง Apply</div>
+              </div>
+              <div className="grid grid-cols-3 gap-1 rounded-md bg-black/20 p-1">
+                {VERIFICATION_PROFILES.map((profile) => (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    className={`rounded px-2 py-1 font-medium ${
+                      verificationProfile === profile.id
+                        ? 'bg-surface-hover text-text-primary'
+                        : 'text-text-secondary hover:text-text-primary'
+                    }`}
+                    onClick={() => setVerificationProfile(profile.id)}
+                  >
+                    {profile.label}
+                  </button>
+                ))}
+              </div>
+              <div className="mt-2 text-text-secondary">
+                {
+                  VERIFICATION_PROFILES.find((profile) => profile.id === verificationProfile)
+                    ?.description
+                }
               </div>
             </div>
           )}

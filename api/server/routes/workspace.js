@@ -1,6 +1,7 @@
 const fs = require('fs/promises');
 const path = require('path');
 const os = require('os');
+const http = require('http');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const express = require('express');
@@ -26,6 +27,8 @@ const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
 const PATCH_REBASE_MESSAGE =
   'Patch could not be applied automatically against the latest file state.';
 const NODE_SYNTAX_EXTENSIONS = new Set(['.cjs', '.js', '.mjs']);
+const TS_SYNTAX_EXTENSIONS = new Set(['.ts', '.tsx']);
+const VERIFICATION_PROFILES = new Set(['fast', 'normal', 'strict']);
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -655,6 +658,11 @@ function createVerificationCheck(name, status, message = '') {
   };
 }
 
+function getVerificationProfile(value) {
+  const profile = String(value || 'fast').toLowerCase();
+  return VERIFICATION_PROFILES.has(profile) ? profile : 'fast';
+}
+
 function getCommandErrorMessage(error) {
   return String(error?.stderr || error?.stdout || error?.message || 'check failed')
     .trim()
@@ -664,7 +672,78 @@ function getCommandErrorMessage(error) {
     .join(' | ');
 }
 
-async function verifyTextFile(normalized, resolved) {
+function loadTypeScript() {
+  try {
+    const typescriptPath = require.resolve('typescript', { paths: [WORKSPACE_WRITE_ROOT] });
+    return require(typescriptPath);
+  } catch {
+    return null;
+  }
+}
+
+function verifyTypeScriptSyntax(ts, normalized, content) {
+  if (!ts) {
+    return createVerificationCheck(
+      `${normalized}: TypeScript syntax`,
+      'skipped',
+      'TypeScript dependency is unavailable in the runtime container',
+    );
+  }
+
+  const result = ts.transpileModule(content, {
+    compilerOptions: {
+      jsx: ts.JsxEmit.ReactJSX,
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2020,
+    },
+    fileName: normalized,
+    reportDiagnostics: true,
+  });
+  const diagnostics = (result.diagnostics || []).filter(
+    (diagnostic) => diagnostic.category === ts.DiagnosticCategory.Error,
+  );
+  if (diagnostics.length === 0) {
+    return createVerificationCheck(`${normalized}: TypeScript syntax`, 'passed');
+  }
+
+  const message = diagnostics
+    .slice(0, 2)
+    .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, ' '))
+    .join(' | ');
+  return createVerificationCheck(`${normalized}: TypeScript syntax`, 'failed', message);
+}
+
+async function verifyReadyz() {
+  const port = Number(process.env.PORT || 3080);
+  return await new Promise((resolve) => {
+    const request = http.get(
+      {
+        hostname: '127.0.0.1',
+        path: '/readyz',
+        port,
+        timeout: 3000,
+      },
+      (response) => {
+        response.resume();
+        if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
+          resolve(createVerificationCheck('runtime readyz', 'passed', `HTTP ${response.statusCode}`));
+          return;
+        }
+        resolve(createVerificationCheck('runtime readyz', 'failed', `HTTP ${response.statusCode || 0}`));
+      },
+    );
+
+    request.on('timeout', () => {
+      request.destroy();
+      resolve(createVerificationCheck('runtime readyz', 'failed', 'readyz probe timed out'));
+    });
+    request.on('error', (error) => {
+      resolve(createVerificationCheck('runtime readyz', 'failed', error.message));
+    });
+  });
+}
+
+async function verifyTextFile(normalized, resolved, options = {}) {
   const stats = await fs.stat(resolved).catch(() => null);
   if (!stats?.isFile()) {
     return [createVerificationCheck(`${normalized}: file`, 'failed', 'File is missing after apply')];
@@ -714,14 +793,26 @@ async function verifyTextFile(normalized, resolved) {
     }
   }
 
+  if (options.checkTypeScriptSyntax && TS_SYNTAX_EXTENSIONS.has(ext)) {
+    checks.push(verifyTypeScriptSyntax(options.ts, normalized, content));
+  }
+
   return checks;
 }
 
-async function verifyAppliedFiles(files) {
+async function verifyAppliedFiles(files, profile = 'fast') {
+  const normalizedProfile = getVerificationProfile(profile);
+  const shouldCheckTypeScriptSyntax = normalizedProfile === 'normal' || normalizedProfile === 'strict';
+  const ts = shouldCheckTypeScriptSyntax ? loadTypeScript() : null;
   const checks = [];
   for (const file of files) {
     const { normalized, resolved } = resolveWritableWorkspacePath(file);
-    checks.push(...(await verifyTextFile(normalized, resolved)));
+    checks.push(
+      ...(await verifyTextFile(normalized, resolved, {
+        checkTypeScriptSyntax: shouldCheckTypeScriptSyntax,
+        ts,
+      })),
+    );
   }
 
   try {
@@ -731,10 +822,14 @@ async function verifyAppliedFiles(files) {
     checks.push(createVerificationCheck('git diff --check', 'failed', getCommandErrorMessage(error)));
   }
 
+  if (normalizedProfile === 'strict') {
+    checks.push(await verifyReadyz());
+  }
+
   const failed = checks.filter((check) => check.status === 'failed').length;
   const passed = checks.filter((check) => check.status === 'passed').length;
   return {
-    profile: 'fast',
+    profile: normalizedProfile,
     status: failed > 0 ? 'failed' : passed > 0 ? 'passed' : 'skipped',
     checks,
   };
@@ -1049,6 +1144,7 @@ router.post('/apply-patch', async (req, res, next) => {
     if (patchBytes > MAX_PATCH_BYTES) {
       return res.status(413).json({ message: 'Patch is too large for safe apply.' });
     }
+    const verificationProfile = getVerificationProfile(req.body?.verificationProfile);
 
     const normalizedPatchText = await normalizePatchHunks(patchText);
     const parsed = parsePatchFiles(normalizedPatchText);
@@ -1095,11 +1191,11 @@ router.post('/apply-patch', async (req, res, next) => {
 
     verification = alreadyApplied
       ? {
-          profile: 'fast',
+          profile: verificationProfile,
           status: 'skipped',
           checks: [createVerificationCheck('post-apply verification', 'skipped', 'No file writes needed')],
         }
-      : await verifyAppliedFiles(parsed.files);
+      : await verifyAppliedFiles(parsed.files, verificationProfile);
 
     await writeActivity({
       type: 'apply_patch',
