@@ -115,7 +115,7 @@ const getPatchApplyMessage = (err: unknown) => {
   const lowerMessage = message.toLowerCase();
 
   if (lowerMessage.includes('patch does not apply')) {
-    return 'Patch ใช้ไม่ได้กับไฟล์ปัจจุบันแล้ว ไฟล์น่าจะเปลี่ยนไปหลังจาก AI สร้าง diff ให้เปิดไฟล์ล่าสุดแล้วขอ AI สร้าง unified diff ใหม่';
+    return 'Patch ยังใช้กับไฟล์ล่าสุดไม่ได้ ระบบลองปรับ hunk และ rebase จาก context แล้ว แต่ยังหาจุดแก้ที่ปลอดภัยไม่เจอ';
   }
 
   if (lowerMessage.includes('already exists in working directory')) {
@@ -597,19 +597,24 @@ export default function CodePanel() {
         files: string[];
         checkpoint?: string | null;
         normalizedPatch?: string;
+        recoveredPatch?: boolean;
+        alreadyApplied?: boolean;
       };
       if (data.normalizedPatch) {
         setPatchText(data.normalizedPatch);
       }
+      const patchFixLabel = data.recoveredPatch
+        ? ' · auto-rebased patch'
+        : data.normalizedPatch
+          ? ' · auto-fixed diff'
+          : '';
       setApplyState(data.applied ? 'applied' : 'failed');
       setApplyMessage(
-        data.checkpoint
-          ? `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์ มี checkpoint: ${data.checkpoint}${
-              data.normalizedPatch ? ' · auto-fixed diff header' : ''
-            }`
-          : `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์${
-              data.normalizedPatch ? ' · auto-fixed diff header' : ''
-            }`,
+        data.alreadyApplied
+          ? `ไม่มีไฟล์ที่ต้องเขียนเพิ่ม ${data.files.length} ไฟล์${patchFixLabel}`
+          : data.checkpoint
+            ? `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์ มี checkpoint: ${data.checkpoint}${patchFixLabel}`
+            : `เขียนไฟล์สำเร็จ ${data.files.length} ไฟล์${patchFixLabel}`,
       );
       await loadTree(currentPath);
       if (selectedFile) {

@@ -22,6 +22,8 @@ const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_READONLY_ROOT || '/rea
 const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
   ? path.resolve(process.env.WORKSPACE_WRITE_ROOT)
   : null;
+const PATCH_REBASE_MESSAGE =
+  'Patch could not be applied automatically against the latest file state.';
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -295,6 +297,270 @@ async function readWorkspaceTextLines(relativePath) {
   const text = buffer.toString('utf8');
   const lines = text.split(/\r?\n/);
   return text.endsWith('\n') || text.endsWith('\r\n') ? lines.slice(0, -1) : lines;
+}
+
+async function readWritableTextFile(relativePath) {
+  const { normalized, resolved } = resolveWritableWorkspacePath(relativePath);
+  if (isBlocked(normalized)) {
+    return null;
+  }
+
+  const buffer = await fs.readFile(resolved).catch(() => null);
+  if (!buffer || isLikelyBinary(buffer)) {
+    return null;
+  }
+
+  const text = buffer.toString('utf8');
+  const lines = text.split(/\r?\n/);
+  return {
+    normalized,
+    resolved,
+    lines: text.endsWith('\n') || text.endsWith('\r\n') ? lines.slice(0, -1) : lines,
+    hasFinalNewline: text.endsWith('\n') || text.endsWith('\r\n'),
+  };
+}
+
+function joinWritableTextLines(lines, hasFinalNewline) {
+  return `${lines.join('\n')}${hasFinalNewline ? '\n' : ''}`;
+}
+
+function hasLineSequenceAt(fileLines, startIndex, sequence) {
+  if (startIndex < 0 || startIndex + sequence.length > fileLines.length) {
+    return false;
+  }
+  return sequence.every((line, offset) => fileLines[startIndex + offset] === line);
+}
+
+function getRecoverableHunkDetails(lines) {
+  return lines.reduce(
+    (details, line) => {
+      if (line.startsWith('\\')) {
+        return details;
+      }
+      if (line.startsWith(' ')) {
+        const content = line.slice(1);
+        details.oldLines.push(content);
+        details.newLines.push(content);
+        details.parts.push({ type: 'context', content });
+        return details;
+      }
+      if (line.startsWith('-')) {
+        const content = line.slice(1);
+        details.oldLines.push(content);
+        details.removedLines.push(content);
+        details.parts.push({ type: 'remove', content });
+        return details;
+      }
+      if (line.startsWith('+')) {
+        const content = line.slice(1);
+        details.newLines.push(content);
+        details.addedLines.push(content);
+        details.parts.push({ type: 'add', content });
+      }
+      return details;
+    },
+    {
+      oldLines: [],
+      newLines: [],
+      addedLines: [],
+      removedLines: [],
+      parts: [],
+    },
+  );
+}
+
+function findPureAddInsertionIndex(fileLines, parts) {
+  const firstAddIndex = parts.findIndex((part) => part.type === 'add');
+  if (firstAddIndex === -1) {
+    return null;
+  }
+
+  const lastAddIndex = parts.findLastIndex((part) => part.type === 'add');
+  const leadingContext = parts
+    .slice(0, firstAddIndex)
+    .filter((part) => part.type === 'context')
+    .map((part) => part.content);
+  const trailingContext = parts
+    .slice(lastAddIndex + 1)
+    .filter((part) => part.type === 'context')
+    .map((part) => part.content);
+
+  for (let size = leadingContext.length; size > 0; size--) {
+    const sequence = leadingContext.slice(leadingContext.length - size);
+    const matchedIndex = findUniqueLineSequence(fileLines, sequence);
+    if (matchedIndex !== null) {
+      return matchedIndex + sequence.length;
+    }
+  }
+
+  for (let size = trailingContext.length; size > 0; size--) {
+    const sequence = trailingContext.slice(0, size);
+    const matchedIndex = findUniqueLineSequence(fileLines, sequence);
+    if (matchedIndex !== null) {
+      return matchedIndex;
+    }
+  }
+
+  return null;
+}
+
+function applyRecoverableHunk(fileLines, hunkLines) {
+  const details = getRecoverableHunkDetails(hunkLines);
+  if (details.addedLines.length === 0 && details.removedLines.length === 0) {
+    return { lines: fileLines, changed: false };
+  }
+
+  if (details.newLines.length > 0) {
+    const alreadyAppliedIndex = findUniqueLineSequence(fileLines, details.newLines);
+    if (alreadyAppliedIndex !== null) {
+      return { lines: fileLines, changed: false };
+    }
+  }
+
+  if (details.oldLines.length > 0) {
+    const matchedIndex = findUniqueLineSequence(fileLines, details.oldLines);
+    if (matchedIndex !== null) {
+      const nextLines = [...fileLines];
+      nextLines.splice(matchedIndex, details.oldLines.length, ...details.newLines);
+      return { lines: nextLines, changed: true };
+    }
+  }
+
+  if (details.removedLines.length === 0 && details.addedLines.length > 0) {
+    const insertionIndex = findPureAddInsertionIndex(fileLines, details.parts);
+    if (insertionIndex !== null) {
+      if (hasLineSequenceAt(fileLines, insertionIndex, details.addedLines)) {
+        return { lines: fileLines, changed: false };
+      }
+
+      const nextLines = [...fileLines];
+      nextLines.splice(insertionIndex, 0, ...details.addedLines);
+      return { lines: nextLines, changed: true };
+    }
+  }
+
+  return null;
+}
+
+function parseRecoverablePatchFiles(patchText) {
+  const files = [];
+  const lines = patchText.split('\n');
+  const hunkPattern = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+  let current = null;
+
+  const ensureCurrent = (rawPath = '') => {
+    if (current) {
+      return current;
+    }
+
+    current = {
+      path: getDiffPath(rawPath),
+      isCreate: false,
+      hunks: [],
+    };
+    files.push(current);
+    return current;
+  };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+
+    if (line.startsWith('diff --git ')) {
+      const parts = line.split(/\s+/);
+      current = {
+        path: getDiffPath(parts[3] ?? parts[2] ?? ''),
+        isCreate: false,
+        hunks: [],
+      };
+      files.push(current);
+      continue;
+    }
+
+    if (line.startsWith('--- /dev/null')) {
+      ensureCurrent('/dev/null').isCreate = true;
+      continue;
+    }
+
+    if (line.startsWith('--- ')) {
+      ensureCurrent(line.slice(4));
+      continue;
+    }
+
+    if (line.startsWith('+++ ')) {
+      const nextPath = getDiffPath(line.slice(4));
+      const active = ensureCurrent(nextPath);
+      if (nextPath !== '/dev/null') {
+        active.path = nextPath;
+      }
+      continue;
+    }
+
+    if (!hunkPattern.test(line)) {
+      continue;
+    }
+
+    const active = ensureCurrent();
+    let bodyEnd = index + 1;
+    while (
+      bodyEnd < lines.length &&
+      !lines[bodyEnd].startsWith('diff --git ') &&
+      !lines[bodyEnd].startsWith('@@ ')
+    ) {
+      bodyEnd += 1;
+    }
+
+    active.hunks.push(
+      normalizeHunkBodyLines(lines.slice(index + 1, bodyEnd), bodyEnd === lines.length),
+    );
+    index = bodyEnd - 1;
+  }
+
+  return files.filter((file) => file.path && file.path !== '/dev/null' && file.hunks.length > 0);
+}
+
+async function recoverPatchAgainstCurrentFiles(patchText, parsed) {
+  if (parsed.createdFiles.length > 0) {
+    return null;
+  }
+
+  const patchFiles = parseRecoverablePatchFiles(patchText);
+  const parsedFiles = new Set(parsed.files);
+  if (
+    patchFiles.length === 0 ||
+    patchFiles.some((file) => file.isCreate || !parsedFiles.has(normalizeRelativePath(file.path)))
+  ) {
+    return null;
+  }
+
+  const changes = [];
+  for (const file of patchFiles) {
+    const current = await readWritableTextFile(file.path);
+    if (!current) {
+      return null;
+    }
+
+    let nextLines = current.lines;
+    let changed = false;
+    for (const hunkLines of file.hunks) {
+      const applied = applyRecoverableHunk(nextLines, hunkLines);
+      if (!applied) {
+        return null;
+      }
+
+      nextLines = applied.lines;
+      changed ||= applied.changed;
+    }
+
+    if (changed) {
+      changes.push({
+        normalized: current.normalized,
+        resolved: current.resolved,
+        content: joinWritableTextLines(nextLines, current.hasFinalNewline),
+      });
+    }
+  }
+
+  return { changes };
 }
 
 async function normalizePatchHunks(patchText) {
@@ -707,26 +973,53 @@ router.post('/apply-patch', async (req, res, next) => {
     patchFile = path.join(tempDir, 'change.diff');
     await fs.writeFile(patchFile, normalizedPatchText, 'utf8');
 
-    await git(['apply', '--check', '--whitespace=nowarn', patchFile]);
-    const checkpoint = await createFileCheckpoint(parsed.files, parsed.createdFiles);
-    await git(['apply', '--whitespace=nowarn', patchFile]);
+    let checkpoint = null;
+    let recoveredPatch = false;
+    let alreadyApplied = false;
+
+    try {
+      await git(['apply', '--check', '--whitespace=nowarn', patchFile]);
+      checkpoint = await createFileCheckpoint(parsed.files, parsed.createdFiles);
+      await git(['apply', '--whitespace=nowarn', patchFile]);
+    } catch (applyError) {
+      const recovery = await recoverPatchAgainstCurrentFiles(normalizedPatchText, parsed);
+      if (!recovery) {
+        throw applyError;
+      }
+
+      recoveredPatch = true;
+      alreadyApplied = recovery.changes.length === 0;
+      if (!alreadyApplied) {
+        checkpoint = await createFileCheckpoint(parsed.files, parsed.createdFiles);
+        for (const change of recovery.changes) {
+          await fs.writeFile(change.resolved, change.content, 'utf8');
+        }
+      }
+    }
+
     await writeActivity({
       type: 'apply_patch',
-      summary: `Applied ${parsed.files.length} files`,
+      summary: recoveredPatch
+        ? `Applied ${parsed.files.length} files with patch rebase`
+        : `Applied ${parsed.files.length} files`,
       files: parsed.files,
-      details: { checkpoint, createdFiles: parsed.createdFiles },
+      details: { checkpoint, createdFiles: parsed.createdFiles, recoveredPatch, alreadyApplied },
     });
 
     return res.json({
       applied: true,
       files: parsed.files,
       checkpoint,
+      recoveredPatch,
+      alreadyApplied,
       normalizedPatch:
         normalizedPatchText !== patchText ? normalizedPatchText : undefined,
     });
   } catch (error) {
     const message = error?.stderr || error?.message || 'Patch apply failed.';
-    return res.status(400).json({ message: message.trim() });
+    return res.status(400).json({
+      message: message.trim() || PATCH_REBASE_MESSAGE,
+    });
   } finally {
     if (patchFile) {
       await fs.rm(path.dirname(patchFile), { recursive: true, force: true }).catch(() => {});
