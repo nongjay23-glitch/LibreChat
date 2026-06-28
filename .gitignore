@@ -181,3 +181,4 @@ CLAUDE.md
 .gsd
 codedb.snapshot
 .workspace-checkpoints/
+.workspace-activity.jsonl
