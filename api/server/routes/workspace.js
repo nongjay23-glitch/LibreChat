@@ -13,6 +13,7 @@ const MAX_LIST_ITEMS = 250;
 const MAX_READ_BYTES = 200 * 1024;
 const MAX_PATCH_BYTES = 512 * 1024;
 const MAX_PATCH_FILES = 20;
+const MAX_VERIFY_BYTES = 1024 * 1024;
 const DEFAULT_CHECKPOINT_KEEP = 5;
 const MAX_CHECKPOINT_KEEP = 50;
 const CHECKPOINT_DIR = '.workspace-checkpoints';
@@ -24,6 +25,7 @@ const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
   : null;
 const PATCH_REBASE_MESSAGE =
   'Patch could not be applied automatically against the latest file state.';
+const NODE_SYNTAX_EXTENSIONS = new Set(['.cjs', '.js', '.mjs']);
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -645,6 +647,99 @@ async function git(args, options = {}) {
   });
 }
 
+function createVerificationCheck(name, status, message = '') {
+  return {
+    name,
+    status,
+    ...(message ? { message: message.slice(0, 240) } : {}),
+  };
+}
+
+function getCommandErrorMessage(error) {
+  return String(error?.stderr || error?.stdout || error?.message || 'check failed')
+    .trim()
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' | ');
+}
+
+async function verifyTextFile(normalized, resolved) {
+  const stats = await fs.stat(resolved).catch(() => null);
+  if (!stats?.isFile()) {
+    return [createVerificationCheck(`${normalized}: file`, 'failed', 'File is missing after apply')];
+  }
+
+  if (stats.size > MAX_VERIFY_BYTES) {
+    return [
+      createVerificationCheck(
+        `${normalized}: file`,
+        'skipped',
+        `File is larger than ${MAX_VERIFY_BYTES} bytes`,
+      ),
+    ];
+  }
+
+  const buffer = await fs.readFile(resolved);
+  if (isLikelyBinary(buffer)) {
+    return [createVerificationCheck(`${normalized}: text`, 'failed', 'Binary content detected')];
+  }
+
+  const content = buffer.toString('utf8');
+  const checks = [createVerificationCheck(`${normalized}: text`, 'passed')];
+  if (/^(<<<<<<<|=======|>>>>>>>)/m.test(content)) {
+    checks.push(createVerificationCheck(`${normalized}: conflict markers`, 'failed'));
+  }
+
+  const ext = path.extname(normalized).toLowerCase();
+  if (ext === '.json') {
+    try {
+      JSON.parse(content);
+      checks.push(createVerificationCheck(`${normalized}: JSON`, 'passed'));
+    } catch (error) {
+      checks.push(createVerificationCheck(`${normalized}: JSON`, 'failed', error.message));
+    }
+  }
+
+  if (NODE_SYNTAX_EXTENSIONS.has(ext)) {
+    try {
+      await execFileAsync(process.execPath, ['--check', resolved], {
+        cwd: WORKSPACE_WRITE_ROOT,
+        maxBuffer: 1024 * 1024,
+        timeout: 15000,
+      });
+      checks.push(createVerificationCheck(`${normalized}: syntax`, 'passed'));
+    } catch (error) {
+      checks.push(createVerificationCheck(`${normalized}: syntax`, 'failed', getCommandErrorMessage(error)));
+    }
+  }
+
+  return checks;
+}
+
+async function verifyAppliedFiles(files) {
+  const checks = [];
+  for (const file of files) {
+    const { normalized, resolved } = resolveWritableWorkspacePath(file);
+    checks.push(...(await verifyTextFile(normalized, resolved)));
+  }
+
+  try {
+    await git(['diff', '--check', '--', ...files], { timeout: 15000 });
+    checks.push(createVerificationCheck('git diff --check', 'passed'));
+  } catch (error) {
+    checks.push(createVerificationCheck('git diff --check', 'failed', getCommandErrorMessage(error)));
+  }
+
+  const failed = checks.filter((check) => check.status === 'failed').length;
+  const passed = checks.filter((check) => check.status === 'passed').length;
+  return {
+    profile: 'fast',
+    status: failed > 0 ? 'failed' : passed > 0 ? 'passed' : 'skipped',
+    checks,
+  };
+}
+
 async function createFileCheckpoint(files, createdFiles = []) {
   const checkpointId = new Date().toISOString().replace(/[:.]/g, '-');
   const checkpointRoot = path.join(WORKSPACE_WRITE_ROOT, CHECKPOINT_DIR, checkpointId);
@@ -976,6 +1071,7 @@ router.post('/apply-patch', async (req, res, next) => {
     let checkpoint = null;
     let recoveredPatch = false;
     let alreadyApplied = false;
+    let verification = null;
 
     try {
       await git(['apply', '--check', '--whitespace=nowarn', patchFile]);
@@ -997,13 +1093,27 @@ router.post('/apply-patch', async (req, res, next) => {
       }
     }
 
+    verification = alreadyApplied
+      ? {
+          profile: 'fast',
+          status: 'skipped',
+          checks: [createVerificationCheck('post-apply verification', 'skipped', 'No file writes needed')],
+        }
+      : await verifyAppliedFiles(parsed.files);
+
     await writeActivity({
       type: 'apply_patch',
       summary: recoveredPatch
         ? `Applied ${parsed.files.length} files with patch rebase`
         : `Applied ${parsed.files.length} files`,
       files: parsed.files,
-      details: { checkpoint, createdFiles: parsed.createdFiles, recoveredPatch, alreadyApplied },
+      details: {
+        checkpoint,
+        createdFiles: parsed.createdFiles,
+        recoveredPatch,
+        alreadyApplied,
+        verification,
+      },
     });
 
     return res.json({
@@ -1012,6 +1122,7 @@ router.post('/apply-patch', async (req, res, next) => {
       checkpoint,
       recoveredPatch,
       alreadyApplied,
+      verification,
       normalizedPatch:
         normalizedPatchText !== patchText ? normalizedPatchText : undefined,
     });

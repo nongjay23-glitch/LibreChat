@@ -74,6 +74,18 @@ type CheckpointCleanupResponse = {
 
 type CodeSection = 'files' | 'changes' | 'history';
 
+type WorkspaceVerificationCheck = {
+  name: string;
+  status: 'passed' | 'failed' | 'skipped';
+  message?: string;
+};
+
+type WorkspaceVerification = {
+  profile: string;
+  status: 'passed' | 'failed' | 'skipped';
+  checks: WorkspaceVerificationCheck[];
+};
+
 type WorkspaceActivity = {
   id: string;
   timestamp: string;
@@ -81,6 +93,9 @@ type WorkspaceActivity = {
   status: string;
   summary: string;
   files?: string[];
+  details?: {
+    verification?: WorkspaceVerification;
+  };
 };
 
 type WorkspaceActivityResponse = {
@@ -127,6 +142,26 @@ const getPatchApplyMessage = (err: unknown) => {
   }
 
   return message;
+};
+
+const getVerificationLabel = (status: WorkspaceVerification['status']) => {
+  if (status === 'passed') {
+    return 'passed';
+  }
+  if (status === 'failed') {
+    return 'failed';
+  }
+  return 'skipped';
+};
+
+const getVerificationClassName = (status: WorkspaceVerification['status']) => {
+  if (status === 'failed') {
+    return 'border-red-500/30 bg-red-500/10 text-red-500';
+  }
+  if (status === 'passed') {
+    return 'border-green-500/30 bg-green-500/10 text-green-500';
+  }
+  return 'border-yellow-500/30 bg-yellow-500/10 text-yellow-500';
 };
 
 const formatCheckpointId = (checkpointId: string) =>
@@ -267,6 +302,7 @@ export default function CodePanel() {
     'idle',
   );
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+  const [applyVerification, setApplyVerification] = useState<WorkspaceVerification | null>(null);
   const [patchPromptCopyState, setPatchPromptCopyState] = useState<
     'idle' | 'copied' | 'failed'
   >('idle');
@@ -581,12 +617,14 @@ export default function CodePanel() {
     if (!isApplyConfirmVisible) {
       setIsApplyConfirmVisible(true);
       setApplyMessage(null);
+      setApplyVerification(null);
       setPatchPromptCopyState('idle');
       return;
     }
 
     setApplyState('applying');
     setApplyMessage(null);
+    setApplyVerification(null);
     setPatchPromptCopyState('idle');
     setIsApplyConfirmVisible(false);
     try {
@@ -599,6 +637,7 @@ export default function CodePanel() {
         normalizedPatch?: string;
         recoveredPatch?: boolean;
         alreadyApplied?: boolean;
+        verification?: WorkspaceVerification;
       };
       if (data.normalizedPatch) {
         setPatchText(data.normalizedPatch);
@@ -609,6 +648,7 @@ export default function CodePanel() {
           ? ' · auto-fixed diff'
           : '';
       setApplyState(data.applied ? 'applied' : 'failed');
+      setApplyVerification(data.verification ?? null);
       setApplyMessage(
         data.alreadyApplied
           ? `ไม่มีไฟล์ที่ต้องเขียนเพิ่ม ${data.files.length} ไฟล์${patchFixLabel}`
@@ -624,6 +664,7 @@ export default function CodePanel() {
       await loadActivity();
     } catch (err) {
       setApplyState('failed');
+      setApplyVerification(null);
       setApplyMessage(getPatchApplyMessage(err));
     }
   };
@@ -1055,6 +1096,33 @@ export default function CodePanel() {
             </div>
           )}
 
+          {applyVerification != null && (
+            <div
+              className={`rounded-md border p-2 text-xs leading-5 ${getVerificationClassName(
+                applyVerification.status,
+              )}`}
+            >
+              <div className="font-medium">
+                Verification: {getVerificationLabel(applyVerification.status)} -{' '}
+                {applyVerification.profile}
+              </div>
+              <div className="mt-1 space-y-1">
+                {applyVerification.checks.slice(0, 5).map((check) => (
+                  <div key={`${check.name}-${check.status}`} className="text-text-primary">
+                    {check.status === 'passed' ? 'PASS' : check.status === 'failed' ? 'FAIL' : 'SKIP'}{' '}
+                    {check.name}
+                    {check.message ? `: ${check.message}` : ''}
+                  </div>
+                ))}
+                {applyVerification.checks.length > 5 && (
+                  <div className="text-text-secondary">
+                    +{applyVerification.checks.length - 5} more checks
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {patchReviewHint != null && (
             <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 p-2 text-xs leading-5 text-yellow-500">
               {patchReviewHint}
@@ -1137,6 +1205,7 @@ export default function CodePanel() {
                     setPatchText('');
                     setApplyState('idle');
                     setApplyMessage(null);
+                    setApplyVerification(null);
                     setPatchPromptCopyState('idle');
                     setIsApplyConfirmVisible(false);
                   }}
@@ -1255,6 +1324,15 @@ export default function CodePanel() {
                   <div className="mt-2 truncate text-text-secondary">
                     {activity.files.slice(0, 2).join(', ')}
                     {activity.files.length > 2 ? ` +${activity.files.length - 2}` : ''}
+                  </div>
+                )}
+                {activity.details?.verification != null && (
+                  <div
+                    className={`mt-2 inline-flex rounded border px-2 py-0.5 text-[11px] ${getVerificationClassName(
+                      activity.details.verification.status,
+                    )}`}
+                  >
+                    verify {getVerificationLabel(activity.details.verification.status)}
                   </div>
                 )}
               </div>
