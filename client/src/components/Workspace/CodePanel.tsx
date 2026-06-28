@@ -1215,8 +1215,8 @@ export default function CodePanel() {
       )}
 
       {activeCodeSection === 'history' && (
-      <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto pr-1 xl:grid-cols-2">
-      <div className="rounded-lg border border-border-light p-3">
+      <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto pr-1 xl:grid-cols-2 xl:overflow-hidden">
+      <div className="flex min-h-0 flex-col rounded-lg border border-border-light p-3">
         <div className="mb-3">
           <div className="flex items-center gap-2 font-medium text-text-primary">
             <History className="h-4 w-4 text-orange-500" aria-hidden="true" />
@@ -1232,7 +1232,7 @@ export default function CodePanel() {
             Loading activity...
           </div>
         ) : activities.length > 0 ? (
-          <div className="max-h-48 space-y-2 overflow-y-auto">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {activities.slice(0, 8).map((activity) => (
               <div
                 key={activity.id}
@@ -1267,7 +1267,7 @@ export default function CodePanel() {
         )}
       </div>
 
-      <div className="rounded-lg border border-border-light p-3">
+      <div className="flex min-h-0 flex-col rounded-lg border border-border-light p-3">
         <div className="mb-3">
           <div className="flex items-center gap-2 font-medium text-text-primary">
             <History className="h-4 w-4 text-orange-500" aria-hidden="true" />
@@ -1316,7 +1316,7 @@ export default function CodePanel() {
             Loading checkpoints...
           </div>
         ) : checkpoints.length > 0 ? (
-          <div className="max-h-52 space-y-2 overflow-y-auto">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {checkpoints.slice(0, 6).map((checkpoint) => (
               <div
                 key={checkpoint.checkpointId}
