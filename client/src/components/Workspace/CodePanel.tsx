@@ -697,7 +697,7 @@ export default function CodePanel() {
   };
 
   return (
-    <section className="flex h-full min-h-0 flex-col gap-4 overflow-y-auto px-4 py-4 text-sm">
+    <section className="flex h-full min-h-0 flex-col gap-3 overflow-hidden px-4 py-4 text-sm">
       <div>
         <div className="flex items-center justify-between gap-3 text-text-primary">
           <div className="flex min-w-0 items-center gap-2">
@@ -759,7 +759,7 @@ export default function CodePanel() {
       )}
 
       {activeCodeSection === 'files' && (
-        <>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
       <div className="grid gap-3 xl:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)]">
       <div className="rounded-lg border border-border-light p-3">
         <div className="mb-3 flex items-center justify-between gap-2">
@@ -860,43 +860,45 @@ export default function CodePanel() {
               {selectedFile ? `${selectedFile.path} · ${formatBytes(selectedFile.size)}` : 'เลือกไฟล์เพื่อดูตัวอย่าง'}
             </div>
           </div>
-          <button
-            type="button"
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-orange-500 px-3 py-2 text-xs font-medium text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!selectedFile}
-            onClick={sendToChat}
-          >
-            <Send className="h-4 w-4" aria-hidden="true" />
-            {sendState === 'attached' ? 'Attached to Chat' : 'Attach to Chat'}
-          </button>
-          <button
-            type="button"
-            className="flex w-full items-center justify-center gap-2 rounded-md border border-orange-500/40 px-3 py-2 text-xs font-medium text-orange-500 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!selectedFile || (selectedFile != null && selectedPaths.has(selectedFile.path))}
-            onClick={addSelectedFileToContext}
-          >
-            <ListPlus className="h-4 w-4" aria-hidden="true" />
-            {selectedFile != null && selectedPaths.has(selectedFile.path) ? 'Added to context' : 'Add to Context'}
-          </button>
-          {selectedContextFiles.length > 0 && (
+          <div className="grid gap-2 sm:grid-cols-2">
             <button
               type="button"
-              className="flex w-full items-center justify-center gap-2 rounded-md border border-green-500/40 px-3 py-2 text-xs font-medium text-green-500 hover:bg-green-500/10"
-              onClick={sendSelectedContextToChat}
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-orange-500 px-3 py-2 text-xs font-medium text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!selectedFile}
+              onClick={sendToChat}
             >
               <Send className="h-4 w-4" aria-hidden="true" />
-              Attach selected files ({selectedContextFiles.length})
+              {sendState === 'attached' ? 'Attached' : 'Attach'}
             </button>
-          )}
-          <button
-            type="button"
-            className="flex w-full items-center justify-center gap-2 rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-            disabled={!selectedFile}
-            onClick={copyContext}
-          >
-            <Copy className="h-4 w-4" aria-hidden="true" />
-            {copyState === 'copied' ? 'คัดลอกแล้ว' : copyState === 'failed' ? 'คัดลอกไม่สำเร็จ' : 'Copy context'}
-          </button>
+            <button
+              type="button"
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-orange-500/40 px-3 py-2 text-xs font-medium text-orange-500 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!selectedFile || (selectedFile != null && selectedPaths.has(selectedFile.path))}
+              onClick={addSelectedFileToContext}
+            >
+              <ListPlus className="h-4 w-4" aria-hidden="true" />
+              {selectedFile != null && selectedPaths.has(selectedFile.path) ? 'Added' : 'Add Context'}
+            </button>
+            {selectedContextFiles.length > 0 && (
+              <button
+                type="button"
+                className="flex w-full items-center justify-center gap-2 rounded-md border border-green-500/40 px-3 py-2 text-xs font-medium text-green-500 hover:bg-green-500/10"
+                onClick={sendSelectedContextToChat}
+              >
+                <Send className="h-4 w-4" aria-hidden="true" />
+                Attach selected ({selectedContextFiles.length})
+              </button>
+            )}
+            <button
+              type="button"
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-border-light px-3 py-2 text-xs font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={!selectedFile}
+              onClick={copyContext}
+            >
+              <Copy className="h-4 w-4" aria-hidden="true" />
+              {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}
+            </button>
+          </div>
         </div>
 
         <pre className="max-h-[24rem] min-h-40 overflow-auto rounded-md bg-black/20 p-3 text-xs leading-5 text-text-primary">
@@ -994,19 +996,17 @@ export default function CodePanel() {
       </div>
       )}
 
-        </>
+        </div>
       )}
 
       {activeCodeSection === 'changes' && (
-      <div className="rounded-lg border border-border-light p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border-light p-3">
         <div className="mb-3">
           <div className="flex items-center gap-2 font-medium text-text-primary">
             <Code2 className="h-4 w-4 text-orange-500" aria-hidden="true" />
             Proposed changes
           </div>
-          <div className="mt-1 text-xs leading-5 text-text-secondary">
-            วาง unified diff/patch จาก AI เพื่อ preview ก่อน รอบนี้ยังไม่เขียนไฟล์จริง
-          </div>
+          <div className="mt-1 text-xs leading-5 text-text-secondary">วาง diff จาก AI เพื่อ preview ก่อนเขียนไฟล์จริง</div>
         </div>
 
         <textarea
@@ -1215,7 +1215,7 @@ export default function CodePanel() {
       )}
 
       {activeCodeSection === 'history' && (
-      <>
+      <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto pr-1 xl:grid-cols-2">
       <div className="rounded-lg border border-border-light p-3">
         <div className="mb-3">
           <div className="flex items-center gap-2 font-medium text-text-primary">
@@ -1405,7 +1405,7 @@ export default function CodePanel() {
         )}
       </div>
 
-      </>
+      </div>
       )}
 
       {false && (
