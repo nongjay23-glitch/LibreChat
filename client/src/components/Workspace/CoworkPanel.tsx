@@ -10,6 +10,7 @@ import {
   ListChecks,
   MessageSquareText,
   Plus,
+  RotateCcw,
   ShieldCheck,
   Target,
   Trash2,
@@ -25,6 +26,15 @@ type PlanStatus = 'todo' | 'doing' | 'done' | 'blocked';
 type CopyState = 'idle' | 'copied' | 'selected';
 type PromptKind = 'plan' | 'diff' | 'verification' | 'handoff';
 type ReadinessStatus = 'planning' | 'needsFiles' | 'needsVerification' | 'readyForCode';
+type CoworkTemplateId = 'uiPolish' | 'bugFix' | 'refactor' | 'testUpdate' | 'docsUpdate';
+type CoworkTemplateField =
+  | 'goal'
+  | 'scope'
+  | 'exclusions'
+  | 'steps'
+  | 'risks'
+  | 'verification'
+  | 'nextAction';
 
 type CoworkStep = {
   id: string;
@@ -69,11 +79,19 @@ type CoworkReadiness = {
   helpKey: TranslationKeys;
   items: ReadinessItem[];
   readyCount: number;
+  nextMissingKey?: TranslationKeys;
 };
 
-const coworkDraftStorageKey = 'librechat.coworkDraft.v1';
+const coworkDraftStorageKey = 'librechat.coworkDraft.v2';
 const statusOptions: PlanStatus[] = ['todo', 'doing', 'done', 'blocked'];
 const promptKinds: PromptKind[] = ['plan', 'diff', 'verification', 'handoff'];
+const templateIds: CoworkTemplateId[] = [
+  'uiPolish',
+  'bugFix',
+  'refactor',
+  'testUpdate',
+  'docsUpdate',
+];
 const statusLabelKeys: Record<PlanStatus, TranslationKeys> = {
   todo: 'com_ui_cowork_status_todo',
   doing: 'com_ui_cowork_status_doing',
@@ -85,6 +103,60 @@ const promptLabelKeys: Record<PromptKind, TranslationKeys> = {
   diff: 'com_ui_cowork_prompt_diff',
   verification: 'com_ui_cowork_prompt_verification',
   handoff: 'com_ui_cowork_prompt_handoff_summary',
+};
+const templateLabelKeys: Record<CoworkTemplateId, TranslationKeys> = {
+  uiPolish: 'com_ui_cowork_template_ui_polish',
+  bugFix: 'com_ui_cowork_template_bug_fix',
+  refactor: 'com_ui_cowork_template_refactor',
+  testUpdate: 'com_ui_cowork_template_test_update',
+  docsUpdate: 'com_ui_cowork_template_docs_update',
+};
+const templateFieldKeys: Record<CoworkTemplateId, Record<CoworkTemplateField, TranslationKeys>> = {
+  uiPolish: {
+    goal: 'com_ui_cowork_template_ui_goal',
+    scope: 'com_ui_cowork_template_ui_scope',
+    exclusions: 'com_ui_cowork_template_ui_exclusions',
+    steps: 'com_ui_cowork_template_ui_steps',
+    risks: 'com_ui_cowork_template_ui_risks',
+    verification: 'com_ui_cowork_template_ui_verification',
+    nextAction: 'com_ui_cowork_template_ui_next_action',
+  },
+  bugFix: {
+    goal: 'com_ui_cowork_template_bug_goal',
+    scope: 'com_ui_cowork_template_bug_scope',
+    exclusions: 'com_ui_cowork_template_bug_exclusions',
+    steps: 'com_ui_cowork_template_bug_steps',
+    risks: 'com_ui_cowork_template_bug_risks',
+    verification: 'com_ui_cowork_template_bug_verification',
+    nextAction: 'com_ui_cowork_template_bug_next_action',
+  },
+  refactor: {
+    goal: 'com_ui_cowork_template_refactor_goal',
+    scope: 'com_ui_cowork_template_refactor_scope',
+    exclusions: 'com_ui_cowork_template_refactor_exclusions',
+    steps: 'com_ui_cowork_template_refactor_steps',
+    risks: 'com_ui_cowork_template_refactor_risks',
+    verification: 'com_ui_cowork_template_refactor_verification',
+    nextAction: 'com_ui_cowork_template_refactor_next_action',
+  },
+  testUpdate: {
+    goal: 'com_ui_cowork_template_test_goal',
+    scope: 'com_ui_cowork_template_test_scope',
+    exclusions: 'com_ui_cowork_template_test_exclusions',
+    steps: 'com_ui_cowork_template_test_steps',
+    risks: 'com_ui_cowork_template_test_risks',
+    verification: 'com_ui_cowork_template_test_verification',
+    nextAction: 'com_ui_cowork_template_test_next_action',
+  },
+  docsUpdate: {
+    goal: 'com_ui_cowork_template_docs_goal',
+    scope: 'com_ui_cowork_template_docs_scope',
+    exclusions: 'com_ui_cowork_template_docs_exclusions',
+    steps: 'com_ui_cowork_template_docs_steps',
+    risks: 'com_ui_cowork_template_docs_risks',
+    verification: 'com_ui_cowork_template_docs_verification',
+    nextAction: 'com_ui_cowork_template_docs_next_action',
+  },
 };
 const blockedPathExamples = [
   '.env',
@@ -106,53 +178,17 @@ const workflowLabelKeys: TranslationKeys[] = [
 
 const createStepId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-const createDefaultDraft = (): CoworkDraft => ({
-  goal: 'Build the first Cowork planning workspace slice.',
-  scope: [
-    'Replace the static Cowork panel with editable planning fields.',
-    'Keep Cowork as a read-only planning layer.',
-    'Prepare prompts that hand work to Chat and Code safely.',
-  ],
-  exclusions: [
-    'No direct file writes from Cowork.',
-    'No backend route changes in this slice.',
-    'No patch apply, checkpoint, restore, or verification actions from Cowork.',
-  ],
-  steps: [
-    {
-      id: createStepId(),
-      title: 'Confirm the goal and scope.',
-      status: 'done',
-    },
-    {
-      id: createStepId(),
-      title: 'Attach suggested files from Code > Files.',
-      status: 'todo',
-    },
-    {
-      id: createStepId(),
-      title: 'Ask Chat for a unified diff.',
-      status: 'todo',
-    },
-    {
-      id: createStepId(),
-      title: 'Review and apply only through Code > Changes.',
-      status: 'todo',
-    },
-  ],
-  inspectFiles: [
-    'client/src/components/Workspace/CoworkPanel.tsx',
-    'client/src/locales/en/translation.json',
-  ],
-  suggestedFiles: ['client/src/components/Workspace/CoworkPanel.tsx'],
+const createEmptyDraft = (): CoworkDraft => ({
+  goal: '',
+  scope: [],
+  exclusions: [],
+  steps: [],
+  inspectFiles: [],
+  suggestedFiles: [],
   avoidFiles: ['.env', 'librechat.yaml', '.git', 'node_modules'],
-  risks: [
-    'AI diff quality depends on current file context.',
-    'Stale context can produce a patch that does not apply.',
-    'Sensitive or blocked paths must stay out of scope.',
-  ],
-  verification: ['Fast workspace verification', 'git diff --check', 'UI smoke test'],
-  nextAction: 'Open Code > Files and attach the suggested files before asking Chat for a diff.',
+  risks: [],
+  verification: [],
+  nextAction: '',
 });
 
 const splitLines = (value: string) =>
@@ -160,6 +196,13 @@ const splitLines = (value: string) =>
     .split('\n')
     .map((item) => item.trim())
     .filter(Boolean);
+
+const createStepsFromText = (value: string) =>
+  splitLines(value).map((title) => ({
+    id: createStepId(),
+    title,
+    status: 'todo' as const,
+  }));
 
 const formatList = (items: string[]) =>
   items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- TBD';
@@ -219,8 +262,50 @@ const normalizeStoredDraft = (
 
 const sanitizeDraftForStorage = (draft: CoworkDraft) => normalizeStoredDraft(draft, draft);
 
+const createStarterDraft = (localize: (key: TranslationKeys) => string): CoworkDraft => ({
+  ...createEmptyDraft(),
+  goal: localize('com_ui_cowork_starter_goal'),
+  scope: splitLines(localize('com_ui_cowork_starter_scope')),
+  exclusions: splitLines(localize('com_ui_cowork_starter_exclusions')),
+  steps: createStepsFromText(localize('com_ui_cowork_starter_steps')),
+  risks: splitLines(localize('com_ui_cowork_starter_risks')),
+  verification: splitLines(localize('com_ui_cowork_starter_verification')),
+  nextAction: localize('com_ui_cowork_starter_next_action'),
+});
+
+const createTemplateDraft = (
+  templateId: CoworkTemplateId,
+  localize: (key: TranslationKeys) => string,
+): CoworkDraft => {
+  const keys = templateFieldKeys[templateId];
+
+  return {
+    ...createEmptyDraft(),
+    goal: localize(keys.goal),
+    scope: splitLines(localize(keys.scope)),
+    exclusions: splitLines(localize(keys.exclusions)),
+    steps: createStepsFromText(localize(keys.steps)),
+    risks: splitLines(localize(keys.risks)),
+    verification: splitLines(localize(keys.verification)),
+    nextAction: localize(keys.nextAction),
+  };
+};
+
+const hasDraftContent = (draft: CoworkDraft) =>
+  Boolean(
+    draft.goal.trim() ||
+      draft.scope.length ||
+      draft.exclusions.length ||
+      draft.steps.some((step) => step.title.trim()) ||
+      draft.inspectFiles.length ||
+      draft.suggestedFiles.length ||
+      draft.risks.length ||
+      draft.verification.length ||
+      draft.nextAction.trim(),
+  );
+
 const loadStoredDraft = () => {
-  const fallback = createDefaultDraft();
+  const fallback = createEmptyDraft();
 
   if (typeof window === 'undefined') {
     return fallback;
@@ -380,14 +465,16 @@ const getReadiness = (draft: CoworkDraft): CoworkReadiness => {
     { labelKey: 'com_ui_cowork_ready_next_action', isReady: hasNextAction },
   ];
   const readyCount = items.filter((item) => item.isReady).length;
+  const nextMissingKey = items.find((item) => !item.isReady)?.labelKey;
 
-  if (!hasGoal || !hasScope || !hasPlan) {
+  if (!hasGoal || !hasScope || !hasPlan || !hasNextAction) {
     return {
       status: 'planning',
       statusKey: 'com_ui_cowork_ready_status_planning',
       helpKey: 'com_ui_cowork_ready_help_planning',
       items,
       readyCount,
+      nextMissingKey,
     };
   }
 
@@ -398,6 +485,7 @@ const getReadiness = (draft: CoworkDraft): CoworkReadiness => {
       helpKey: 'com_ui_cowork_ready_help_needs_files',
       items,
       readyCount,
+      nextMissingKey,
     };
   }
 
@@ -408,6 +496,7 @@ const getReadiness = (draft: CoworkDraft): CoworkReadiness => {
       helpKey: 'com_ui_cowork_ready_help_needs_verification',
       items,
       readyCount,
+      nextMissingKey,
     };
   }
 
@@ -417,6 +506,7 @@ const getReadiness = (draft: CoworkDraft): CoworkReadiness => {
     helpKey: 'com_ui_cowork_ready_help_ready_for_code',
     items,
     readyCount,
+    nextMissingKey,
   };
 };
 
@@ -559,6 +649,7 @@ export default function CoworkPanel() {
   const verificationPrompt = useMemo(() => createVerificationPrompt(draft), [draft]);
   const handoffSummary = useMemo(() => createHandoffSummary(draft), [draft]);
   const readiness = useMemo(() => getReadiness(draft), [draft]);
+  const isDraftEmpty = useMemo(() => !hasDraftContent(draft), [draft]);
   const prompts: Record<PromptKind, string> = useMemo(
     () => ({
       plan: planPrompt,
@@ -634,6 +725,27 @@ export default function CoworkPanel() {
     }));
   };
 
+  const resetCopyStates = () => {
+    setPlanCopyState('idle');
+    setDiffCopyState('idle');
+    setVerificationCopyState('idle');
+    setHandoffCopyState('idle');
+  };
+
+  const replaceDraft = (nextDraft: CoworkDraft) => {
+    setDraft(nextDraft);
+    setActivePromptKind('plan');
+    resetCopyStates();
+  };
+
+  const startNewPlan = () => {
+    replaceDraft(createEmptyDraft());
+  };
+
+  const applyTemplate = (templateId: CoworkTemplateId) => {
+    replaceDraft(createTemplateDraft(templateId, localize));
+  };
+
   const copyText = async (text: string, target: PromptKind) => {
     const setState =
       target === 'plan'
@@ -670,22 +782,7 @@ export default function CoworkPanel() {
   };
 
   const resetDraft = () => {
-    const defaultDraft = createDefaultDraft();
-
-    if (typeof window !== 'undefined') {
-      try {
-        window.localStorage.removeItem(coworkDraftStorageKey);
-      } catch {
-        // Ignore local storage failures; reset should still restore in-memory defaults.
-      }
-    }
-
-    setDraft(defaultDraft);
-    setActivePromptKind('plan');
-    setPlanCopyState('idle');
-    setDiffCopyState('idle');
-    setVerificationCopyState('idle');
-    setHandoffCopyState('idle');
+    replaceDraft(createStarterDraft(localize));
   };
 
   const renderCopyLabel = (base: string, state: CopyState) => {
@@ -709,26 +806,28 @@ export default function CoworkPanel() {
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto px-4 py-4 text-sm">
       <div className="flex flex-col gap-3 rounded-lg border border-border-light bg-surface-secondary p-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="mb-1 flex items-center gap-2 text-text-primary">
-              <ShieldCheck className="h-5 w-5 text-green-500" aria-hidden="true" />
-              <h2 className="text-base font-semibold">{localize('com_ui_cowork')}</h2>
-            </div>
-            <p className="text-xs leading-5 text-text-secondary">
-              {localize('com_ui_cowork_intro')}
-            </p>
-            <p className="mt-1 text-xs leading-5 text-text-tertiary">
-              {localize('com_ui_cowork_saved_locally')}
-            </p>
+        <div className="min-w-0">
+          <div className="mb-1 flex items-center gap-2 text-text-primary">
+            <ShieldCheck className="h-5 w-5 text-green-500" aria-hidden="true" />
+            <h2 className="text-base font-semibold">{localize('com_ui_cowork')}</h2>
           </div>
-          <ActionButton onClick={resetDraft}>
-            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            {localize('com_ui_cowork_reset')}
-          </ActionButton>
+          <p className="text-xs leading-5 text-text-secondary">
+            {localize('com_ui_cowork_intro')}
+          </p>
+          <p className="mt-1 text-xs leading-5 text-text-tertiary">
+            {localize('com_ui_cowork_saved_locally')}
+          </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
+          <ActionButton onClick={startNewPlan}>
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            {localize('com_ui_cowork_new_plan')}
+          </ActionButton>
+          <ActionButton onClick={resetDraft}>
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            {localize('com_ui_cowork_reset')}
+          </ActionButton>
           <ActionButton variant="primary" onClick={() => void copyText(planPrompt, 'plan')}>
             {planCopyState !== 'idle' ? (
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -749,6 +848,31 @@ export default function CoworkPanel() {
             <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
             {localize('com_ui_cowork_open_code')}
           </ActionButton>
+        </div>
+
+        {isDraftEmpty ? (
+          <div className="rounded-md border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
+            <div className="font-semibold text-text-primary">
+              {localize('com_ui_cowork_empty_title')}
+            </div>
+            <div className="mt-1">{localize('com_ui_cowork_empty_help')}</div>
+          </div>
+        ) : null}
+
+        <div className="space-y-2">
+          <div className="text-xs font-semibold text-text-secondary">
+            {localize('com_ui_cowork_templates')}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {templateIds.map((templateId) => (
+              <ActionButton key={templateId} onClick={() => applyTemplate(templateId)}>
+                {localize(templateLabelKeys[templateId])}
+              </ActionButton>
+            ))}
+          </div>
+          <p className="text-xs leading-5 text-text-tertiary">
+            {localize('com_ui_cowork_templates_help')}
+          </p>
         </div>
 
         {!hasSuggestedFiles ? (
@@ -773,6 +897,14 @@ export default function CoworkPanel() {
             </div>
             <p className="mt-1 text-xs leading-5 text-text-secondary">
               {localize(readiness.helpKey)}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-text-tertiary">
+              {readiness.nextMissingKey
+                ? localize('com_ui_cowork_ready_next_missing').replace(
+                    '{{0}}',
+                    localize(readiness.nextMissingKey),
+                  )
+                : localize('com_ui_cowork_ready_all_set')}
             </p>
           </div>
           <div className="shrink-0 rounded-md border border-border-light bg-surface-secondary px-3 py-2 text-xs font-semibold text-text-primary">
@@ -867,37 +999,46 @@ export default function CoworkPanel() {
         icon={ClipboardList}
       >
         <div className="space-y-2">
-          {draft.steps.map((step, index) => (
-            <div key={step.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-2">
-              <select
-                value={step.status}
-                aria-label={`${localize('com_ui_cowork_step_status')} ${index + 1}`}
-                onChange={(event) => updateStepStatus(step.id, event.target.value as PlanStatus)}
-                className="h-9 rounded-md border border-border-light bg-surface-secondary px-2 text-xs text-text-primary outline-none focus:border-blue-500"
+          {draft.steps.length > 0 ? (
+            draft.steps.map((step, index) => (
+              <div
+                key={step.id}
+                className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
               >
-                {statusOptions.map((status) => (
-                  <option key={status} value={status}>
-                    {localize(statusLabelKeys[status])}
-                  </option>
-                ))}
-              </select>
-              <input
-                value={step.title}
-                aria-label={`${localize('com_ui_cowork_step')} ${index + 1}`}
-                placeholder={localize('com_ui_cowork_step_placeholder')}
-                onChange={(event) => updateStepTitle(step.id, event.target.value)}
-                className="h-9 min-w-0 rounded-md border border-border-light bg-surface-secondary px-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:border-blue-500"
-              />
-              <button
-                type="button"
-                onClick={() => removeStep(step.id)}
-                aria-label={`${localize('com_ui_cowork_remove_step')} ${index + 1}`}
-                className="flex h-9 w-9 items-center justify-center rounded-md border border-border-light bg-surface-secondary text-text-secondary hover:text-text-primary"
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-              </button>
+                <select
+                  value={step.status}
+                  aria-label={`${localize('com_ui_cowork_step_status')} ${index + 1}`}
+                  onChange={(event) => updateStepStatus(step.id, event.target.value as PlanStatus)}
+                  className="h-9 rounded-md border border-border-light bg-surface-secondary px-2 text-xs text-text-primary outline-none focus:border-blue-500"
+                >
+                  {statusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {localize(statusLabelKeys[status])}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  value={step.title}
+                  aria-label={`${localize('com_ui_cowork_step')} ${index + 1}`}
+                  placeholder={localize('com_ui_cowork_step_placeholder')}
+                  onChange={(event) => updateStepTitle(step.id, event.target.value)}
+                  className="h-9 min-w-0 rounded-md border border-border-light bg-surface-secondary px-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:border-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeStep(step.id)}
+                  aria-label={`${localize('com_ui_cowork_remove_step')} ${index + 1}`}
+                  className="flex h-9 w-9 items-center justify-center justify-self-end rounded-md border border-border-light bg-surface-secondary text-text-secondary hover:text-text-primary"
+                >
+                  <Trash2 className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            ))
+          ) : (
+            <div className="rounded-md border border-dashed border-border-light bg-surface-secondary px-3 py-3 text-xs leading-5 text-text-secondary">
+              {localize('com_ui_cowork_plan_empty')}
             </div>
-          ))}
+          )}
           <ActionButton onClick={addStep}>
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />
             {localize('com_ui_cowork_add_step')}
@@ -1013,7 +1154,7 @@ export default function CoworkPanel() {
       >
         <div className="space-y-2">
           <div
-            className="grid grid-cols-4 gap-1 rounded-md bg-surface-secondary p-1"
+            className="grid grid-cols-2 gap-1 rounded-md bg-surface-secondary p-1 sm:grid-cols-4"
             role="tablist"
             aria-label={localize('com_ui_cowork_prompt_handoff')}
           >

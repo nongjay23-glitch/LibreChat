@@ -392,6 +392,7 @@ Phase 6: Advanced Cowork
 - Keep broad agent autonomy out of scope unless a separate safety design is approved.
 - Current implementation starts the usability pass with a compact ready checklist, workflow status strip, and collapsed prompt handoff tools. Cowork remains frontend-only and read-only.
 - Current implementation also simplifies the primary Cowork surface around Goal, Next Action, Plan, and readiness. Scope, Files, Risks, Verification, and prompt tools are available in collapsed details instead of filling the first view.
+- Current implementation adds Manual Cowork polish: `New plan` starts a blank safe draft, `Reset draft` restores a starter plan, reusable templates cover UI polish, bug fix, refactor, test update, and docs update, the empty state explains the manual workflow, and the readiness checklist names the next missing field.
 
 ### Cowork Auto Roadmap
 
@@ -492,6 +493,7 @@ Implementation:
 - Add reusable plan templates such as UI polish, bug fix, refactor, test update, documentation, and provider/model config.
 - Keep `Details` and `Prompt Handoff` collapsed by default.
 - Keep primary view focused on Goal, Next Action, Plan, and readiness.
+- Current implementation keeps this phase manual-only: templates fill safe planning fields, real file paths still come from the user, `Prepare for Code` only copies a handoff prompt, and `Open Code` only switches to Code mode.
 
 Acceptance:
 
