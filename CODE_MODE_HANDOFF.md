@@ -385,6 +385,7 @@ Phase 6: Advanced Cowork
 - Consider optional project memory or NotebookLM-style source workflows only after Cowork and Code are stable.
 - Keep broad agent autonomy out of scope unless a separate safety design is approved.
 - Current implementation starts the usability pass with a compact ready checklist, workflow status strip, and collapsed prompt handoff tools. Cowork remains frontend-only and read-only.
+- Current implementation also simplifies the primary Cowork surface around Goal, Next Action, Plan, and readiness. Scope, Files, Risks, Verification, and prompt tools are available in collapsed details instead of filling the first view.
 
 ### Acceptance Criteria
 

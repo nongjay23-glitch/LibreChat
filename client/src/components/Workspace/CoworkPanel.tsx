@@ -424,15 +424,23 @@ function FieldShell({
   title,
   description,
   icon: Icon,
+  variant = 'card',
   children,
 }: {
   title: string;
   description?: string;
   icon: LucideIcon;
+  variant?: 'card' | 'plain';
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-lg border border-border-light bg-surface-primary p-3">
+    <section
+      className={cn(
+        variant === 'card'
+          ? 'rounded-lg border border-border-light bg-surface-primary p-3'
+          : 'min-w-0',
+      )}
+    >
       <div className="mb-2 flex items-start gap-2">
         <Icon className="mt-0.5 h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
         <div className="min-w-0">
@@ -727,7 +735,7 @@ export default function CoworkPanel() {
             ) : (
               <Copy className="h-3.5 w-3.5" aria-hidden="true" />
             )}
-            {renderCopyLabel(localize('com_ui_cowork_copy_plan_prompt'), planCopyState)}
+            {renderCopyLabel(localize('com_ui_cowork_refine_plan'), planCopyState)}
           </ActionButton>
           <ActionButton onClick={() => void copyText(handoffSummary, 'handoff')}>
             {handoffCopyState !== 'idle' ? (
@@ -735,7 +743,7 @@ export default function CoworkPanel() {
             ) : (
               <ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />
             )}
-            {renderCopyLabel(localize('com_ui_cowork_copy_handoff_summary'), handoffCopyState)}
+            {renderCopyLabel(localize('com_ui_cowork_prepare_for_code'), handoffCopyState)}
           </ActionButton>
           <ActionButton onClick={() => setActive('code-workspace')}>
             <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
@@ -823,6 +831,181 @@ export default function CoworkPanel() {
         </div>
       </section>
 
+      <div className="grid gap-3 xl:grid-cols-2">
+        <FieldShell
+          title={localize('com_ui_cowork_goal')}
+          description={localize('com_ui_cowork_goal_help')}
+          icon={Target}
+        >
+          <TextAreaField
+            value={draft.goal}
+            rows={2}
+            ariaLabel={localize('com_ui_cowork_goal')}
+            placeholder={localize('com_ui_cowork_goal_placeholder')}
+            onChange={(goal) => setDraft((current) => ({ ...current, goal }))}
+          />
+        </FieldShell>
+
+        <FieldShell
+          title={localize('com_ui_cowork_next_action')}
+          description={localize('com_ui_cowork_next_action_help')}
+          icon={Check}
+        >
+          <TextAreaField
+            value={draft.nextAction}
+            rows={2}
+            ariaLabel={localize('com_ui_cowork_next_action')}
+            placeholder={localize('com_ui_cowork_next_action_placeholder')}
+            onChange={(nextAction) => setDraft((current) => ({ ...current, nextAction }))}
+          />
+        </FieldShell>
+      </div>
+
+      <FieldShell
+        title={localize('com_ui_cowork_plan')}
+        description={localize('com_ui_cowork_plan_help')}
+        icon={ClipboardList}
+      >
+        <div className="space-y-2">
+          {draft.steps.map((step, index) => (
+            <div key={step.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-2">
+              <select
+                value={step.status}
+                aria-label={`${localize('com_ui_cowork_step_status')} ${index + 1}`}
+                onChange={(event) => updateStepStatus(step.id, event.target.value as PlanStatus)}
+                className="h-9 rounded-md border border-border-light bg-surface-secondary px-2 text-xs text-text-primary outline-none focus:border-blue-500"
+              >
+                {statusOptions.map((status) => (
+                  <option key={status} value={status}>
+                    {localize(statusLabelKeys[status])}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={step.title}
+                aria-label={`${localize('com_ui_cowork_step')} ${index + 1}`}
+                placeholder={localize('com_ui_cowork_step_placeholder')}
+                onChange={(event) => updateStepTitle(step.id, event.target.value)}
+                className="h-9 min-w-0 rounded-md border border-border-light bg-surface-secondary px-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:border-blue-500"
+              />
+              <button
+                type="button"
+                onClick={() => removeStep(step.id)}
+                aria-label={`${localize('com_ui_cowork_remove_step')} ${index + 1}`}
+                className="flex h-9 w-9 items-center justify-center rounded-md border border-border-light bg-surface-secondary text-text-secondary hover:text-text-primary"
+              >
+                <Trash2 className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          ))}
+          <ActionButton onClick={addStep}>
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            {localize('com_ui_cowork_add_step')}
+          </ActionButton>
+        </div>
+      </FieldShell>
+
+      <DisclosureShell
+        title={localize('com_ui_cowork_details')}
+        description={localize('com_ui_cowork_details_help')}
+        icon={ListChecks}
+      >
+        <div className="grid gap-3 xl:grid-cols-2">
+        <FieldShell
+          title={localize('com_ui_cowork_scope')}
+          description={localize('com_ui_cowork_scope_help')}
+          icon={ListChecks}
+          variant="plain"
+        >
+          <div className="space-y-2">
+            <TextAreaField
+              value={draft.scope.join('\n')}
+              ariaLabel={localize('com_ui_cowork_scope')}
+              placeholder={localize('com_ui_cowork_scope_placeholder')}
+              onChange={(value) => updateListField('scope', value)}
+            />
+            <TextAreaField
+              value={draft.exclusions.join('\n')}
+              ariaLabel={localize('com_ui_cowork_exclusions')}
+              placeholder={localize('com_ui_cowork_exclusions_placeholder')}
+              onChange={(value) => updateListField('exclusions', value)}
+            />
+            <ActionButton onClick={() => clearListField('exclusions')}>
+              {localize('com_ui_cowork_clear_exclusions')}
+            </ActionButton>
+          </div>
+        </FieldShell>
+
+        <FieldShell
+          title={localize('com_ui_cowork_files')}
+          description={localize('com_ui_cowork_files_help')}
+          icon={FolderOpen}
+          variant="plain"
+        >
+          <div className="space-y-2">
+            <TextAreaField
+              value={draft.inspectFiles.join('\n')}
+              ariaLabel={localize('com_ui_cowork_files_inspect')}
+              placeholder={localize('com_ui_cowork_files_inspect_placeholder')}
+              onChange={(value) => updateListField('inspectFiles', value)}
+            />
+            <TextAreaField
+              value={draft.suggestedFiles.join('\n')}
+              ariaLabel={localize('com_ui_cowork_files_attach')}
+              placeholder={localize('com_ui_cowork_files_placeholder')}
+              onChange={(value) => updateListField('suggestedFiles', value)}
+            />
+            <TextAreaField
+              value={draft.avoidFiles.join('\n')}
+              ariaLabel={localize('com_ui_cowork_files_avoid')}
+              placeholder={localize('com_ui_cowork_files_avoid_placeholder')}
+              onChange={(value) => updateListField('avoidFiles', value)}
+            />
+            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
+              <div className="font-semibold text-text-primary">
+                {localize('com_ui_cowork_files_safety')}
+              </div>
+              <div className="mt-1">
+                {localize('com_ui_cowork_files_safety_help')}{' '}
+                <span className="font-mono">{blockedPathExamples.join(', ')}</span>
+              </div>
+            </div>
+            <ActionButton onClick={() => clearListField('suggestedFiles')}>
+              {localize('com_ui_cowork_clear_files')}
+            </ActionButton>
+          </div>
+        </FieldShell>
+
+        <FieldShell
+          title={localize('com_ui_cowork_risks')}
+          description={localize('com_ui_cowork_risks_help')}
+          icon={AlertTriangle}
+          variant="plain"
+        >
+          <TextAreaField
+            value={draft.risks.join('\n')}
+            ariaLabel={localize('com_ui_cowork_risks')}
+            placeholder={localize('com_ui_cowork_risks_placeholder')}
+            onChange={(value) => updateListField('risks', value)}
+          />
+        </FieldShell>
+
+        <FieldShell
+          title={localize('com_ui_cowork_verification')}
+          description={localize('com_ui_cowork_verification_help')}
+          icon={FileText}
+          variant="plain"
+        >
+          <TextAreaField
+            value={draft.verification.join('\n')}
+            ariaLabel={localize('com_ui_cowork_verification')}
+            placeholder={localize('com_ui_cowork_verification_placeholder')}
+            onChange={(value) => updateListField('verification', value)}
+          />
+        </FieldShell>
+        </div>
+      </DisclosureShell>
+
       <DisclosureShell
         title={localize('com_ui_cowork_prompt_handoff')}
         description={localize('com_ui_cowork_prompt_handoff_help')}
@@ -909,171 +1092,6 @@ export default function CoworkPanel() {
           </div>
         </div>
       </DisclosureShell>
-
-      <FieldShell
-        title={localize('com_ui_cowork_goal')}
-        description={localize('com_ui_cowork_goal_help')}
-        icon={Target}
-      >
-        <TextAreaField
-          value={draft.goal}
-          rows={2}
-          ariaLabel={localize('com_ui_cowork_goal')}
-          placeholder={localize('com_ui_cowork_goal_placeholder')}
-          onChange={(goal) => setDraft((current) => ({ ...current, goal }))}
-        />
-      </FieldShell>
-
-      <div className="grid gap-3 xl:grid-cols-2">
-        <FieldShell
-          title={localize('com_ui_cowork_scope')}
-          description={localize('com_ui_cowork_scope_help')}
-          icon={ListChecks}
-        >
-          <div className="space-y-2">
-            <TextAreaField
-              value={draft.scope.join('\n')}
-              ariaLabel={localize('com_ui_cowork_scope')}
-              placeholder={localize('com_ui_cowork_scope_placeholder')}
-              onChange={(value) => updateListField('scope', value)}
-            />
-            <TextAreaField
-              value={draft.exclusions.join('\n')}
-              ariaLabel={localize('com_ui_cowork_exclusions')}
-              placeholder={localize('com_ui_cowork_exclusions_placeholder')}
-              onChange={(value) => updateListField('exclusions', value)}
-            />
-            <ActionButton onClick={() => clearListField('exclusions')}>
-              {localize('com_ui_cowork_clear_exclusions')}
-            </ActionButton>
-          </div>
-        </FieldShell>
-
-        <FieldShell
-          title={localize('com_ui_cowork_files')}
-          description={localize('com_ui_cowork_files_help')}
-          icon={FolderOpen}
-        >
-          <div className="space-y-2">
-            <TextAreaField
-              value={draft.inspectFiles.join('\n')}
-              ariaLabel={localize('com_ui_cowork_files_inspect')}
-              placeholder={localize('com_ui_cowork_files_inspect_placeholder')}
-              onChange={(value) => updateListField('inspectFiles', value)}
-            />
-            <TextAreaField
-              value={draft.suggestedFiles.join('\n')}
-              ariaLabel={localize('com_ui_cowork_files_attach')}
-              placeholder={localize('com_ui_cowork_files_placeholder')}
-              onChange={(value) => updateListField('suggestedFiles', value)}
-            />
-            <TextAreaField
-              value={draft.avoidFiles.join('\n')}
-              ariaLabel={localize('com_ui_cowork_files_avoid')}
-              placeholder={localize('com_ui_cowork_files_avoid_placeholder')}
-              onChange={(value) => updateListField('avoidFiles', value)}
-            />
-            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
-              <div className="font-semibold text-text-primary">
-                {localize('com_ui_cowork_files_safety')}
-              </div>
-              <div className="mt-1">
-                {localize('com_ui_cowork_files_safety_help')}{' '}
-                <span className="font-mono">{blockedPathExamples.join(', ')}</span>
-              </div>
-            </div>
-            <ActionButton onClick={() => clearListField('suggestedFiles')}>
-              {localize('com_ui_cowork_clear_files')}
-            </ActionButton>
-          </div>
-        </FieldShell>
-      </div>
-
-      <FieldShell
-        title={localize('com_ui_cowork_plan')}
-        description={localize('com_ui_cowork_plan_help')}
-        icon={ClipboardList}
-      >
-        <div className="space-y-2">
-          {draft.steps.map((step, index) => (
-            <div key={step.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-2">
-              <select
-                value={step.status}
-                aria-label={`${localize('com_ui_cowork_step_status')} ${index + 1}`}
-                onChange={(event) => updateStepStatus(step.id, event.target.value as PlanStatus)}
-                className="h-9 rounded-md border border-border-light bg-surface-secondary px-2 text-xs text-text-primary outline-none focus:border-blue-500"
-              >
-                {statusOptions.map((status) => (
-                  <option key={status} value={status}>
-                    {localize(statusLabelKeys[status])}
-                  </option>
-                ))}
-              </select>
-              <input
-                value={step.title}
-                aria-label={`${localize('com_ui_cowork_step')} ${index + 1}`}
-                placeholder={localize('com_ui_cowork_step_placeholder')}
-                onChange={(event) => updateStepTitle(step.id, event.target.value)}
-                className="h-9 min-w-0 rounded-md border border-border-light bg-surface-secondary px-3 text-sm text-text-primary outline-none placeholder:text-text-tertiary focus:border-blue-500"
-              />
-              <button
-                type="button"
-                onClick={() => removeStep(step.id)}
-                aria-label={`${localize('com_ui_cowork_remove_step')} ${index + 1}`}
-                className="flex h-9 w-9 items-center justify-center rounded-md border border-border-light bg-surface-secondary text-text-secondary hover:text-text-primary"
-              >
-                <Trash2 className="h-4 w-4" aria-hidden="true" />
-              </button>
-            </div>
-          ))}
-          <ActionButton onClick={addStep}>
-            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            {localize('com_ui_cowork_add_step')}
-          </ActionButton>
-        </div>
-      </FieldShell>
-
-      <div className="grid gap-3 xl:grid-cols-2">
-        <FieldShell
-          title={localize('com_ui_cowork_risks')}
-          description={localize('com_ui_cowork_risks_help')}
-          icon={AlertTriangle}
-        >
-          <TextAreaField
-            value={draft.risks.join('\n')}
-            ariaLabel={localize('com_ui_cowork_risks')}
-            placeholder={localize('com_ui_cowork_risks_placeholder')}
-            onChange={(value) => updateListField('risks', value)}
-          />
-        </FieldShell>
-
-        <FieldShell
-          title={localize('com_ui_cowork_verification')}
-          description={localize('com_ui_cowork_verification_help')}
-          icon={FileText}
-        >
-          <TextAreaField
-            value={draft.verification.join('\n')}
-            ariaLabel={localize('com_ui_cowork_verification')}
-            placeholder={localize('com_ui_cowork_verification_placeholder')}
-            onChange={(value) => updateListField('verification', value)}
-          />
-        </FieldShell>
-      </div>
-
-      <FieldShell
-        title={localize('com_ui_cowork_next_action')}
-        description={localize('com_ui_cowork_next_action_help')}
-        icon={Check}
-      >
-        <TextAreaField
-          value={draft.nextAction}
-          rows={2}
-          ariaLabel={localize('com_ui_cowork_next_action')}
-          placeholder={localize('com_ui_cowork_next_action_placeholder')}
-          onChange={(nextAction) => setDraft((current) => ({ ...current, nextAction }))}
-        />
-      </FieldShell>
     </section>
   );
 }
