@@ -42,8 +42,22 @@ type CoworkDraft = {
   nextAction: string;
 };
 
+type CoworkDraftCandidate = Partial<{
+  goal: string;
+  scope: string[];
+  exclusions: string[];
+  steps: Array<Partial<CoworkStep>>;
+  inspectFiles: string[];
+  suggestedFiles: string[];
+  avoidFiles: string[];
+  risks: string[];
+  verification: string[];
+  nextAction: string;
+}>;
+
 type ListField = Exclude<keyof CoworkDraft, 'goal' | 'steps' | 'nextAction'>;
 
+const coworkDraftStorageKey = 'librechat.coworkDraft.v1';
 const statusOptions: PlanStatus[] = ['todo', 'doing', 'done', 'blocked'];
 const promptKinds: PromptKind[] = ['plan', 'diff', 'verification'];
 const statusLabelKeys: Record<PlanStatus, TranslationKeys> = {
@@ -128,6 +142,81 @@ const splitLines = (value: string) =>
 
 const formatList = (items: string[]) =>
   items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- TBD';
+
+const sensitiveDraftPattern =
+  /\b(api[-_ ]?key|bearer|password|secret|token|credential)\b|-----BEGIN/i;
+
+const sanitizeDraftText = (value: string) =>
+  sensitiveDraftPattern.test(value) ? '' : value.trim();
+
+const getDraftText = (value: string | undefined, fallback: string) =>
+  typeof value === 'string' ? sanitizeDraftText(value) : fallback;
+
+const getDraftList = (value: string[] | undefined, fallback: string[]) => {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  return value
+    .map((item) => (typeof item === 'string' ? sanitizeDraftText(item) : ''))
+    .filter(Boolean);
+};
+
+const isPlanStatus = (value: string | undefined): value is PlanStatus =>
+  value ? statusOptions.includes(value as PlanStatus) : false;
+
+const getDraftSteps = (
+  value: Array<Partial<CoworkStep>> | undefined,
+  fallback: CoworkStep[],
+) => {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+
+  return value.map((step) => ({
+    id: typeof step.id === 'string' && step.id ? step.id : createStepId(),
+    title: typeof step.title === 'string' ? sanitizeDraftText(step.title) : '',
+    status: isPlanStatus(step.status) ? step.status : 'todo',
+  }));
+};
+
+const normalizeStoredDraft = (
+  value: CoworkDraftCandidate,
+  fallback: CoworkDraft,
+): CoworkDraft => ({
+  goal: getDraftText(value.goal, fallback.goal),
+  scope: getDraftList(value.scope, fallback.scope),
+  exclusions: getDraftList(value.exclusions, fallback.exclusions),
+  steps: getDraftSteps(value.steps, fallback.steps),
+  inspectFiles: getDraftList(value.inspectFiles, fallback.inspectFiles),
+  suggestedFiles: getDraftList(value.suggestedFiles, fallback.suggestedFiles),
+  avoidFiles: getDraftList(value.avoidFiles, fallback.avoidFiles),
+  risks: getDraftList(value.risks, fallback.risks),
+  verification: getDraftList(value.verification, fallback.verification),
+  nextAction: getDraftText(value.nextAction, fallback.nextAction),
+});
+
+const sanitizeDraftForStorage = (draft: CoworkDraft) => normalizeStoredDraft(draft, draft);
+
+const loadStoredDraft = () => {
+  const fallback = createDefaultDraft();
+
+  if (typeof window === 'undefined') {
+    return fallback;
+  }
+
+  try {
+    const storedDraft = window.localStorage.getItem(coworkDraftStorageKey);
+
+    if (!storedDraft) {
+      return fallback;
+    }
+
+    return normalizeStoredDraft(JSON.parse(storedDraft) as CoworkDraftCandidate, fallback);
+  } catch {
+    return fallback;
+  }
+};
 
 const writeClipboard = (text: string) =>
   Promise.race([
@@ -320,7 +409,7 @@ function ActionButton({
 export default function CoworkPanel() {
   const localize = useLocalize();
   const promptPreviewRef = useRef<HTMLTextAreaElement | null>(null);
-  const [draft, setDraft] = useState<CoworkDraft>(() => createDefaultDraft());
+  const [draft, setDraft] = useState<CoworkDraft>(() => loadStoredDraft());
   const [activePromptKind, setActivePromptKind] = useState<PromptKind>('plan');
   const [planCopyState, setPlanCopyState] = useState<CopyState>('idle');
   const [diffCopyState, setDiffCopyState] = useState<CopyState>('idle');
@@ -343,6 +432,21 @@ export default function CoworkPanel() {
     setPlanCopyState('idle');
     setDiffCopyState('idle');
     setVerificationCopyState('idle');
+  }, [draft]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(
+        coworkDraftStorageKey,
+        JSON.stringify(sanitizeDraftForStorage(draft)),
+      );
+    } catch {
+      return;
+    }
   }, [draft]);
 
   useEffect(() => {
@@ -421,7 +525,17 @@ export default function CoworkPanel() {
   };
 
   const resetDraft = () => {
-    setDraft(createDefaultDraft());
+    const defaultDraft = createDefaultDraft();
+
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.removeItem(coworkDraftStorageKey);
+      } catch {
+        // Ignore local storage failures; reset should still restore in-memory defaults.
+      }
+    }
+
+    setDraft(defaultDraft);
     setActivePromptKind('plan');
     setPlanCopyState('idle');
     setDiffCopyState('idle');
@@ -455,6 +569,9 @@ export default function CoworkPanel() {
             </div>
             <p className="text-xs leading-5 text-text-secondary">
               {localize('com_ui_cowork_intro')}
+            </p>
+            <p className="mt-1 text-xs leading-5 text-text-tertiary">
+              {localize('com_ui_cowork_saved_locally')}
             </p>
           </div>
           <ActionButton onClick={resetDraft}>

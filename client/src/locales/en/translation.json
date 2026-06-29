@@ -971,6 +971,7 @@
   "com_ui_cowork_risks": "Risks",
   "com_ui_cowork_risks_help": "Call out stale context, sensitive files, model quality, and build impact.",
   "com_ui_cowork_risks_placeholder": "One risk per line",
+  "com_ui_cowork_saved_locally": "Draft saves locally in this browser.",
   "com_ui_cowork_scope": "Scope",
   "com_ui_cowork_scope_help": "Define what is included and what is explicitly excluded.",
   "com_ui_cowork_scope_placeholder": "One in-scope item per line",

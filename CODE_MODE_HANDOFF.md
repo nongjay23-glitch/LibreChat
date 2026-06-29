@@ -35,7 +35,7 @@ Sensitive provider/API config lives in local config and must not be printed or c
   - Code mode UI: Files, Changes, History.
   - File preview, selected context, patch review, apply confirmation, verification display.
 - `client/src/components/Workspace/CoworkPanel.tsx`
-  - Cowork surface exists but is not the active focus yet.
+  - Cowork planning workspace with Goal, Scope, Plan, Files, Risks, Verification, Next Action, prompt handoff, file-context guidance, and local draft persistence.
 - `client/src/components/Workspace/WorkspaceModeTabs.tsx`
   - Chat/Cowork/Code mode tabs.
 - `client/src/components/Messages/Content/CodeBar.tsx`
@@ -366,6 +366,7 @@ Phase 4: Plan persistence
 - Decide whether first persistence should use local storage or conversation/project metadata.
 - Add save, load, and reset behavior for Cowork drafts.
 - Keep secrets and blocked path content out of saved plans.
+- Current implementation uses browser `localStorage` for a frontend-only draft. Cowork still has no backend write route and still cannot browse, attach, or edit files directly.
 - Suggested commit after verification: `Persist cowork drafts`.
 
 Phase 5: Code workflow integration
