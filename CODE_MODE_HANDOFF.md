@@ -1,6 +1,6 @@
 # Code Mode Handoff
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 This file summarizes the custom Code mode work completed in this LibreChat-based workspace so a new chat can continue without re-reading the whole conversation.
 
@@ -133,6 +133,18 @@ Post-apply verification now supports profiles:
 
 The system reports `passed`, `failed`, or `skipped`. It should not fake a pass when a runtime dependency is unavailable.
 
+Verification UI polish completed:
+
+- Verification profile options are collapsed by default in `Code > Changes`.
+- Post-apply verification results show a compact summary first.
+- Failed verification opens details automatically.
+- Passed verification stays compact, with a `Details` toggle for full checks.
+
+Diff prompt polish completed:
+
+- The retry prompt now starts with stricter English rules so models are more likely to produce valid unified diffs.
+- The prompt tells the model to return only a unified diff, use the latest attached file as source of truth, include `diff --git`, `---`, `+++`, and valid `@@` hunks, keep hunks small with context, and avoid blocked paths.
+
 ## Model And Provider Work Completed
 
 - Added OpenAI-compatible provider setup for AI Passport/Qwen3.6 35B A3B Passport.
@@ -177,10 +189,8 @@ Code mode is functionally usable and close to done.
 
 Remaining optional polish:
 
-- Make verification details collapsible if the panel feels too busy.
 - Add clearer History detail view for each verification result.
 - Add stronger automated UI smoke tests for Code mode.
-- Improve the AI prompt/skill that asks models to output valid unified diffs.
 
 ## Next Planned Area
 

@@ -315,6 +315,8 @@ export default function CodePanel() {
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [applyVerification, setApplyVerification] = useState<WorkspaceVerification | null>(null);
   const [verificationProfile, setVerificationProfile] = useState<VerificationProfile>('fast');
+  const [isVerificationOptionsOpen, setIsVerificationOptionsOpen] = useState(false);
+  const [isVerificationDetailsOpen, setIsVerificationDetailsOpen] = useState(false);
   const [patchPromptCopyState, setPatchPromptCopyState] = useState<
     'idle' | 'copied' | 'failed'
   >('idle');
@@ -420,6 +422,12 @@ export default function CodePanel() {
       applyState === 'failed' && applyMessage ? `\n\nerror ล่าสุด:\n${applyMessage}` : '';
 
     return [
+      'Return ONLY a valid unified diff. Do not explain. Do not paste a full file.',
+      'Use the latest attached file content as the source of truth. Do not guess line numbers from an older message.',
+      'Every changed file must include: diff --git a/path b/path, --- a/path, +++ b/path, and a correct @@ hunk header.',
+      'Keep each hunk small and include enough unchanged context lines around the change so git apply can match it.',
+      'Do not edit or mention blocked paths such as .env, token, password, credential, node_modules, logs, or uploads.',
+      'If the requested change cannot be expressed safely as a unified diff, return an empty diff block.',
       'สร้าง unified diff ใหม่เท่านั้น ห้ามอธิบาย ห้ามเขียนเนื้อหาไฟล์เต็ม',
       'ให้อ้างอิงจากไฟล์ล่าสุดที่แนบมาในแชท และแก้เฉพาะจุดที่ขอ',
       'diff ต้องมี header แบบ --- a/path และ +++ b/path พร้อม @@ hunk ที่ถูกต้อง',
@@ -493,6 +501,7 @@ export default function CodePanel() {
     setApplyMessage(null);
     setPatchPromptCopyState('idle');
     setIsApplyConfirmVisible(false);
+    setIsVerificationDetailsOpen(false);
     setPendingWorkspacePatch(null);
   }, [pendingWorkspacePatch, setPendingWorkspacePatch]);
 
@@ -631,6 +640,7 @@ export default function CodePanel() {
       setApplyMessage(null);
       setApplyVerification(null);
       setPatchPromptCopyState('idle');
+      setIsVerificationDetailsOpen(false);
       return;
     }
 
@@ -639,6 +649,7 @@ export default function CodePanel() {
     setApplyVerification(null);
     setPatchPromptCopyState('idle');
     setIsApplyConfirmVisible(false);
+    setIsVerificationDetailsOpen(false);
     try {
       const data = (await request.post('/api/workspace/apply-patch', {
         patch: patchText,
@@ -662,6 +673,7 @@ export default function CodePanel() {
           : '';
       setApplyState(data.applied ? 'applied' : 'failed');
       setApplyVerification(data.verification ?? null);
+      setIsVerificationDetailsOpen(data.verification?.status === 'failed');
       setApplyMessage(
         data.alreadyApplied
           ? `ไม่มีไฟล์ที่ต้องเขียนเพิ่ม ${data.files.length} ไฟล์${patchFixLabel}`
@@ -1072,6 +1084,7 @@ export default function CodePanel() {
             setApplyMessage(null);
             setPatchPromptCopyState('idle');
             setIsApplyConfirmVisible(false);
+            setIsVerificationDetailsOpen(false);
           }}
           placeholder="Paste unified diff/patch here"
           spellCheck={false}
@@ -1103,6 +1116,21 @@ export default function CodePanel() {
                 <div className="font-medium text-text-primary">Verification</div>
                 <div className="text-text-secondary">หลัง Apply</div>
               </div>
+              <button
+                type="button"
+                className="mb-2 inline-flex items-center gap-1 rounded border border-border-light px-2 py-1 font-medium text-text-secondary hover:bg-surface-hover hover:text-text-primary"
+                onClick={() => setIsVerificationOptionsOpen((value) => !value)}
+              >
+                <ChevronRight
+                  className={`h-3.5 w-3.5 transition-transform ${
+                    isVerificationOptionsOpen ? 'rotate-90' : ''
+                  }`}
+                  aria-hidden="true"
+                />
+                {verificationProfile.toUpperCase()} {isVerificationOptionsOpen ? 'hide' : 'options'}
+              </button>
+              {isVerificationOptionsOpen && (
+                <>
               <div className="grid grid-cols-3 gap-1 rounded-md bg-black/20 p-1">
                 {VERIFICATION_PROFILES.map((profile) => (
                   <button
@@ -1125,6 +1153,8 @@ export default function CodePanel() {
                     ?.description
                 }
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1146,24 +1176,41 @@ export default function CodePanel() {
                 applyVerification.status,
               )}`}
             >
-              <div className="font-medium">
-                Verification: {getVerificationLabel(applyVerification.status)} -{' '}
-                {applyVerification.profile}
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="font-medium">
+                    Verification: {getVerificationLabel(applyVerification.status)} -{' '}
+                    {applyVerification.profile}
+                  </div>
+                  <div className="mt-1 text-text-secondary">
+                    {applyVerification.checks.length} checks
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-current/30 px-2 py-1 font-medium hover:bg-black/10"
+                  onClick={() => setIsVerificationDetailsOpen((value) => !value)}
+                >
+                  <ChevronRight
+                    className={`h-3.5 w-3.5 transition-transform ${
+                      isVerificationDetailsOpen ? 'rotate-90' : ''
+                    }`}
+                    aria-hidden="true"
+                  />
+                  {isVerificationDetailsOpen ? 'Hide' : 'Details'}
+                </button>
               </div>
-              <div className="mt-1 space-y-1">
-                {applyVerification.checks.slice(0, 5).map((check) => (
+              {isVerificationDetailsOpen && (
+              <div className="mt-2 space-y-1">
+                {applyVerification.checks.map((check) => (
                   <div key={`${check.name}-${check.status}`} className="text-text-primary">
                     {check.status === 'passed' ? 'PASS' : check.status === 'failed' ? 'FAIL' : 'SKIP'}{' '}
                     {check.name}
                     {check.message ? `: ${check.message}` : ''}
                   </div>
                 ))}
-                {applyVerification.checks.length > 5 && (
-                  <div className="text-text-secondary">
-                    +{applyVerification.checks.length - 5} more checks
-                  </div>
-                )}
               </div>
+              )}
             </div>
           )}
 
@@ -1252,6 +1299,7 @@ export default function CodePanel() {
                     setApplyVerification(null);
                     setPatchPromptCopyState('idle');
                     setIsApplyConfirmVisible(false);
+                    setIsVerificationDetailsOpen(false);
                   }}
                 >
               Clear diff
