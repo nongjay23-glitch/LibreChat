@@ -842,6 +842,238 @@ After the first pass:
 - Add a better file suggestion flow using the workspace tree.
 - Add optional project memory or NotebookLM-style source mode after Cowork and Code are stable.
 
+## NotebookLM / Sources Plan
+
+This is the next product area after the current Chat/Cowork/Code foundation. The goal is a NotebookLM-style source system for this project, not Studio generation yet.
+
+### Goal
+
+Build a `Sources` or `Notebook` mode that lets the user collect trusted materials, ask questions grounded in those materials, save useful notes, and reuse source context in Chat/Cowork without pasting huge text blocks.
+
+The first version should be useful for reading and reasoning over user-provided documents. It should not try to become a full autonomous research agent.
+
+### What The User Wants
+
+- A NotebookLM-like core experience inside this Claude-like workspace.
+- Multiple notebooks or source collections.
+- Source upload/paste/import.
+- Source list and source preview.
+- Chat answers grounded in selected sources.
+- Simple citations or source labels.
+- Notes saved from useful answers.
+- Notebook guide/overview with summary, key topics, and suggested questions.
+- Ability to reuse source context in Chat and later Cowork.
+- No noisy long context pasted into the chat body.
+
+### Explicitly Not In Scope Yet
+
+Do not build Studio outputs yet. The user specifically said the Studio area from the screenshot is not needed now.
+
+Defer these:
+
+- Audio overview
+- Slides
+- Video overview
+- Mind map
+- Report generation
+- Flashcards
+- Quiz/test generation
+- Infographic
+- Data table generation
+- Full web crawler
+- Google Drive sync
+- OCR/scanned PDF handling
+- Heavy vector database/RAG pipeline if a simpler MVP works first
+- Autonomous agent behavior
+
+### Recommended App Placement
+
+Add a new top-level workspace tab after Code:
+
+```text
+Chat | Cowork | Code | Sources
+```
+
+`Sources` is clearer than `NotebookLM` because it describes what the mode does and avoids implying this is Google's product.
+
+If the UI later needs multiple notebooks, `Sources` can contain a notebook selector at the top.
+
+### Core UI Layout
+
+Use a three-region layout on desktop:
+
+```text
+| Sources List | Source Chat / Guide / Notes | Source Preview |
+```
+
+Responsive behavior:
+
+- Desktop: source list left, main work area center, preview drawer right.
+- Narrow screens: source list and preview become collapsible drawers.
+- Keep the UI dense and work-focused, similar to the existing Code/Cowork workspace style.
+
+### UI Sections
+
+Recommended first-pass sections:
+
+- `Notebooks`
+  - Select or create a notebook/source collection.
+  - First implementation can start with one default notebook if persistence is not ready.
+- `Sources`
+  - List sources in the current notebook.
+  - Show title, type, size, added date, and enabled/disabled state.
+  - Add source from paste text, `.txt`, `.md`, and later text-based PDF.
+- `Preview`
+  - Read-only source preview.
+  - Search within source.
+  - Show metadata and simple section/chunk boundaries.
+- `Ask`
+  - Ask questions about selected/enabled sources.
+  - Answers should say when the answer is not found in sources.
+- `Citations`
+  - MVP can show simple labels such as `[Source: filename.md]`.
+  - Later version can link to exact chunks/highlights.
+- `Notes`
+  - Save useful answer snippets or user notes.
+  - Notes can become source context later.
+- `Guide`
+  - Notebook overview.
+  - Summary of selected sources.
+  - Key topics.
+  - Suggested questions.
+  - Known gaps or unanswered areas.
+
+### Source Types For MVP
+
+Start simple:
+
+- Paste text.
+- `.txt`
+- `.md`
+- Small text-like files with safe size limits.
+
+Next source types:
+
+- Text-based PDF extraction.
+- URL import for manually supplied pages.
+- `.docx` if a reliable parser is available.
+
+Avoid OCR and broad web crawling until the source model is stable.
+
+### Safety Rules
+
+- Sources mode reads only sources the user explicitly adds.
+- It must not scan the whole computer.
+- It must not read Code workspace files unless the user explicitly sends/attaches them.
+- Block or warn on secret-like files: `.env`, token, password, credential, `.git`, database files, logs, uploads.
+- No write/delete/rename actions outside the Sources database/storage.
+- No direct terminal execution.
+- If sources are used in Code/Cowork, they are context only; actual file edits still go through Code mode.
+
+### Grounding Rules
+
+The answer behavior should be stricter than normal Chat:
+
+- Prefer answering from selected sources.
+- If the answer is not in selected sources, say so clearly.
+- Do not invent citations.
+- Mention which source(s) support the answer.
+- If sources disagree, call out the disagreement.
+- If the user asks outside the sources, answer only if allowed by the current mode and label it as outside-source knowledge.
+
+### Data Model Sketch
+
+First pass can be simple and local-app friendly:
+
+```ts
+type Notebook = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type Source = {
+  id: string;
+  notebookId: string;
+  title: string;
+  type: 'text' | 'markdown' | 'pdf' | 'url';
+  content: string;
+  sizeBytes: number;
+  enabled: boolean;
+  createdAt: string;
+};
+
+type SourceNote = {
+  id: string;
+  notebookId: string;
+  title: string;
+  content: string;
+  sourceIds: string[];
+  createdAt: string;
+};
+```
+
+Chunking/citations can start as simple paragraph or heading chunks. A vector index can be added later if source sizes outgrow direct context windows.
+
+### Integration With Existing Workspace
+
+- `Sources -> Chat`: attach selected source snippets as file-like context, similar to Code mode code context.
+- `Sources -> Cowork`: provide project/reference context for planning.
+- `Sources -> Code`: context only; no file writes.
+- `Chat`: can ask source-grounded questions when source context is attached.
+- `Cowork`: can ask for source-backed planning and cite source labels.
+
+Do not duplicate Code mode patch/apply logic in Sources.
+
+### First Implementation Slice
+
+Recommended first coding slice:
+
+1. Add a `Sources` tab to the workspace mode tabs.
+2. Create a `SourcesPanel` with source list, add-source form, preview, and simple note area.
+3. Store sources in frontend state first or a small backend route if persistence is needed immediately.
+4. Support paste text and markdown/text files.
+5. Add enable/disable source toggles.
+6. Add `Attach selected sources to Chat`.
+7. Add a source-grounded prompt template:
+   - answer using selected sources
+   - cite source labels
+   - say when not found
+8. Add `Guide` generation prompt:
+   - summarize selected sources
+   - key topics
+   - suggested questions
+   - gaps
+9. Keep Studio outputs hidden/deferred.
+
+### Acceptance Criteria
+
+Sources MVP is acceptable when:
+
+- The user can add a text/markdown source.
+- The user can see sources in a list.
+- The user can preview a source.
+- The user can enable/disable sources.
+- The user can attach selected sources to Chat without dumping huge visible context into the message.
+- The prompt instructs the model to cite source labels and avoid guessing outside sources.
+- The UI does not include Studio tiles yet.
+- The app builds and `/readyz` returns `OK`.
+
+### Later Enhancements
+
+After MVP:
+
+- Persist notebooks/sources per user.
+- Add PDF text extraction.
+- Add URL import.
+- Add better chunking and clickable citations.
+- Add source search.
+- Add source compare/contradiction finder.
+- Add note-to-source conversion.
+- Add Notebook Guide caching.
+- Add Studio outputs later only when the core source workflow is stable.
+
 ## How To Continue In A New Chat
 
 Start by reading:
