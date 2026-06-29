@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -20,7 +20,7 @@ import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
 type PlanStatus = 'todo' | 'doing' | 'done' | 'blocked';
-type CopyState = 'idle' | 'copied' | 'failed';
+type CopyState = 'idle' | 'copied' | 'selected';
 type PromptKind = 'plan' | 'diff' | 'verification';
 
 type CoworkStep = {
@@ -34,7 +34,9 @@ type CoworkDraft = {
   scope: string[];
   exclusions: string[];
   steps: CoworkStep[];
+  inspectFiles: string[];
   suggestedFiles: string[];
+  avoidFiles: string[];
   risks: string[];
   verification: string[];
   nextAction: string;
@@ -55,6 +57,17 @@ const promptLabelKeys: Record<PromptKind, TranslationKeys> = {
   diff: 'com_ui_cowork_prompt_diff',
   verification: 'com_ui_cowork_prompt_verification',
 };
+const blockedPathExamples = [
+  '.env',
+  'token',
+  'password',
+  'credential',
+  '.git',
+  'node_modules',
+  'logs',
+  'uploads',
+  'database files',
+];
 
 const createStepId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
@@ -92,7 +105,12 @@ const createDefaultDraft = (): CoworkDraft => ({
       status: 'todo',
     },
   ],
+  inspectFiles: [
+    'client/src/components/Workspace/CoworkPanel.tsx',
+    'client/src/locales/en/translation.json',
+  ],
   suggestedFiles: ['client/src/components/Workspace/CoworkPanel.tsx'],
+  avoidFiles: ['.env', 'librechat.yaml', '.git', 'node_modules'],
   risks: [
     'AI diff quality depends on current file context.',
     'Stale context can produce a patch that does not apply.',
@@ -111,7 +129,21 @@ const splitLines = (value: string) =>
 const formatList = (items: string[]) =>
   items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- TBD';
 
-const copyTextFallback = (text: string) => {
+const writeClipboard = (text: string) =>
+  Promise.race([
+    navigator.clipboard.writeText(text),
+    new Promise<never>((_, reject) => {
+      window.setTimeout(() => reject(new Error('Clipboard write timed out')), 1000);
+    }),
+  ]);
+
+const copyTextFallback = (text: string, visibleTextArea?: HTMLTextAreaElement | null) => {
+  if (visibleTextArea && visibleTextArea.value === text) {
+    visibleTextArea.focus();
+    visibleTextArea.select();
+    return document.execCommand('copy');
+  }
+
   const textArea = document.createElement('textarea');
   textArea.value = text;
   textArea.setAttribute('readonly', '');
@@ -148,7 +180,11 @@ const createPlanPrompt = (draft: CoworkDraft) =>
         : '1. [todo] TBD'
     }`,
     '',
-    `Files:\n${formatList(draft.suggestedFiles)}`,
+    `Files to inspect:\n${formatList(draft.inspectFiles)}`,
+    '',
+    `Files to attach in Code > Files:\n${formatList(draft.suggestedFiles)}`,
+    '',
+    `Files or paths to avoid:\n${formatList(draft.avoidFiles)}`,
     '',
     `Risks:\n${formatList(draft.risks)}`,
     '',
@@ -172,7 +208,11 @@ const createDiffPrompt = (draft: CoworkDraft) =>
     '',
     `Out of scope:\n${formatList(draft.exclusions)}`,
     '',
+    `Files to inspect first:\n${formatList(draft.inspectFiles)}`,
+    '',
     `Attached files expected from Code > Files:\n${formatList(draft.suggestedFiles)}`,
+    '',
+    `Do not edit these files or paths:\n${formatList(draft.avoidFiles)}`,
     '',
     `Verification target:\n${formatList(draft.verification)}`,
   ].join('\n');
@@ -186,7 +226,11 @@ const createVerificationPrompt = (draft: CoworkDraft) =>
     '',
     `Goal:\n${draft.goal || 'TBD'}`,
     '',
-    `Files expected to be changed:\n${formatList(draft.suggestedFiles)}`,
+    `Files expected to be inspected:\n${formatList(draft.inspectFiles)}`,
+    '',
+    `Files expected to be changed or attached:\n${formatList(draft.suggestedFiles)}`,
+    '',
+    `Files or paths that should remain untouched:\n${formatList(draft.avoidFiles)}`,
     '',
     `Verification checks to run or inspect:\n${formatList(draft.verification)}`,
     '',
@@ -275,6 +319,7 @@ function ActionButton({
 
 export default function CoworkPanel() {
   const localize = useLocalize();
+  const promptPreviewRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState<CoworkDraft>(() => createDefaultDraft());
   const [activePromptKind, setActivePromptKind] = useState<PromptKind>('plan');
   const [planCopyState, setPlanCopyState] = useState<CopyState>('idle');
@@ -349,11 +394,29 @@ export default function CoworkPanel() {
         : target === 'diff'
           ? setDiffCopyState
           : setVerificationCopyState;
+    setActivePromptKind(target);
+
+    if (copyTextFallback(text, promptPreviewRef.current)) {
+      setState('copied');
+      return;
+    }
+
     try {
-      await navigator.clipboard.writeText(text);
+      await writeClipboard(text);
       setState('copied');
     } catch {
-      setState(copyTextFallback(text) ? 'copied' : 'failed');
+      window.setTimeout(() => {
+        const promptPreview = promptPreviewRef.current;
+
+        if (copyTextFallback(text, promptPreview)) {
+          setState('copied');
+          return;
+        }
+
+        promptPreview?.focus();
+        promptPreview?.select();
+        setState('selected');
+      }, 0);
     }
   };
 
@@ -369,8 +432,8 @@ export default function CoworkPanel() {
     if (state === 'copied') {
       return localize('com_ui_cowork_copied');
     }
-    if (state === 'failed') {
-      return localize('com_ui_cowork_copy_failed');
+    if (state === 'selected') {
+      return localize('com_ui_cowork_prompt_selected');
     }
     return base;
   };
@@ -402,7 +465,7 @@ export default function CoworkPanel() {
 
         <div className="flex flex-wrap gap-2">
           <ActionButton variant="primary" onClick={() => void copyText(planPrompt, 'plan')}>
-            {planCopyState === 'copied' ? (
+            {planCopyState !== 'idle' ? (
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
             ) : (
               <Copy className="h-3.5 w-3.5" aria-hidden="true" />
@@ -413,7 +476,7 @@ export default function CoworkPanel() {
             onClick={() => void copyText(diffPrompt, 'diff')}
             disabled={!hasSuggestedFiles}
           >
-            {diffCopyState === 'copied' ? (
+            {diffCopyState !== 'idle' ? (
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
             ) : (
               <ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />
@@ -421,7 +484,7 @@ export default function CoworkPanel() {
             {renderCopyLabel(localize('com_ui_cowork_prepare_diff_request'), diffCopyState)}
           </ActionButton>
           <ActionButton onClick={() => void copyText(verificationPrompt, 'verification')}>
-            {verificationCopyState === 'copied' ? (
+            {verificationCopyState !== 'idle' ? (
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
             ) : (
               <ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />
@@ -476,6 +539,7 @@ export default function CoworkPanel() {
             })}
           </div>
           <textarea
+            ref={promptPreviewRef}
             readOnly
             rows={8}
             value={prompts[activePromptKind]}
@@ -492,7 +556,7 @@ export default function CoworkPanel() {
               onClick={() => void copyText(prompts[activePromptKind], activePromptKind)}
               disabled={activePromptKind === 'diff' && !hasSuggestedFiles}
             >
-              {activeCopyState === 'copied' ? (
+              {activeCopyState !== 'idle' ? (
                 <Check className="h-3.5 w-3.5" aria-hidden="true" />
               ) : (
                 <Copy className="h-3.5 w-3.5" aria-hidden="true" />
@@ -549,11 +613,32 @@ export default function CoworkPanel() {
         >
           <div className="space-y-2">
             <TextAreaField
+              value={draft.inspectFiles.join('\n')}
+              ariaLabel={localize('com_ui_cowork_files_inspect')}
+              placeholder={localize('com_ui_cowork_files_inspect_placeholder')}
+              onChange={(value) => updateListField('inspectFiles', value)}
+            />
+            <TextAreaField
               value={draft.suggestedFiles.join('\n')}
-              ariaLabel={localize('com_ui_cowork_files')}
+              ariaLabel={localize('com_ui_cowork_files_attach')}
               placeholder={localize('com_ui_cowork_files_placeholder')}
               onChange={(value) => updateListField('suggestedFiles', value)}
             />
+            <TextAreaField
+              value={draft.avoidFiles.join('\n')}
+              ariaLabel={localize('com_ui_cowork_files_avoid')}
+              placeholder={localize('com_ui_cowork_files_avoid_placeholder')}
+              onChange={(value) => updateListField('avoidFiles', value)}
+            />
+            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
+              <div className="font-semibold text-text-primary">
+                {localize('com_ui_cowork_files_safety')}
+              </div>
+              <div className="mt-1">
+                {localize('com_ui_cowork_files_safety_help')}{' '}
+                <span className="font-mono">{blockedPathExamples.join(', ')}</span>
+              </div>
+            </div>
             <ActionButton onClick={() => clearListField('suggestedFiles')}>
               {localize('com_ui_cowork_clear_files')}
             </ActionButton>
