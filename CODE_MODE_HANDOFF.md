@@ -375,6 +375,7 @@ Phase 5: Code workflow integration
 - Prepare a handoff summary that tells the user which files to attach and what diff to request.
 - Keep the file-changing path as `Review in Code -> Apply -> Checkpoint -> Verification`.
 - Do not let Cowork apply patches, create checkpoints, restore files, or bypass confirmation.
+- Current implementation adds a read-only `Open Code` action and a `Copy handoff summary` prompt. It only switches the active workspace tab or copies text; it does not attach files, apply patches, or call backend write routes.
 - Suggested commit after verification: `Connect cowork handoff to code workflow`.
 
 Phase 6: Advanced Cowork

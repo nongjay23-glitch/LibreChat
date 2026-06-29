@@ -4,6 +4,7 @@ import {
   Check,
   ClipboardList,
   Copy,
+  Code2,
   FileText,
   FolderOpen,
   ListChecks,
@@ -16,12 +17,13 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { TranslationKeys } from '~/hooks';
+import { useActivePanel } from '~/Providers';
 import { useLocalize } from '~/hooks';
 import { cn } from '~/utils';
 
 type PlanStatus = 'todo' | 'doing' | 'done' | 'blocked';
 type CopyState = 'idle' | 'copied' | 'selected';
-type PromptKind = 'plan' | 'diff' | 'verification';
+type PromptKind = 'plan' | 'diff' | 'verification' | 'handoff';
 
 type CoworkStep = {
   id: string;
@@ -59,7 +61,7 @@ type ListField = Exclude<keyof CoworkDraft, 'goal' | 'steps' | 'nextAction'>;
 
 const coworkDraftStorageKey = 'librechat.coworkDraft.v1';
 const statusOptions: PlanStatus[] = ['todo', 'doing', 'done', 'blocked'];
-const promptKinds: PromptKind[] = ['plan', 'diff', 'verification'];
+const promptKinds: PromptKind[] = ['plan', 'diff', 'verification', 'handoff'];
 const statusLabelKeys: Record<PlanStatus, TranslationKeys> = {
   todo: 'com_ui_cowork_status_todo',
   doing: 'com_ui_cowork_status_doing',
@@ -70,6 +72,7 @@ const promptLabelKeys: Record<PromptKind, TranslationKeys> = {
   plan: 'com_ui_cowork_prompt_plan',
   diff: 'com_ui_cowork_prompt_diff',
   verification: 'com_ui_cowork_prompt_verification',
+  handoff: 'com_ui_cowork_prompt_handoff_summary',
 };
 const blockedPathExamples = [
   '.env',
@@ -326,6 +329,23 @@ const createVerificationPrompt = (draft: CoworkDraft) =>
     `Known risks:\n${formatList(draft.risks)}`,
   ].join('\n');
 
+const createHandoffSummary = (draft: CoworkDraft) =>
+  [
+    'Cowork handoff summary',
+    '',
+    `Goal:\n${draft.goal || 'TBD'}`,
+    '',
+    `Files to inspect:\n${formatList(draft.inspectFiles)}`,
+    '',
+    `Files to attach in Code > Files:\n${formatList(draft.suggestedFiles)}`,
+    '',
+    `Files or paths to avoid:\n${formatList(draft.avoidFiles)}`,
+    '',
+    `Verification:\n${formatList(draft.verification)}`,
+    '',
+    `Next Action:\n${draft.nextAction || 'Open Code > Files and attach the suggested files.'}`,
+  ].join('\n');
+
 function FieldShell({
   title,
   description,
@@ -408,23 +428,27 @@ function ActionButton({
 
 export default function CoworkPanel() {
   const localize = useLocalize();
+  const { setActive } = useActivePanel();
   const promptPreviewRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState<CoworkDraft>(() => loadStoredDraft());
   const [activePromptKind, setActivePromptKind] = useState<PromptKind>('plan');
   const [planCopyState, setPlanCopyState] = useState<CopyState>('idle');
   const [diffCopyState, setDiffCopyState] = useState<CopyState>('idle');
   const [verificationCopyState, setVerificationCopyState] = useState<CopyState>('idle');
+  const [handoffCopyState, setHandoffCopyState] = useState<CopyState>('idle');
 
   const planPrompt = useMemo(() => createPlanPrompt(draft), [draft]);
   const diffPrompt = useMemo(() => createDiffPrompt(draft), [draft]);
   const verificationPrompt = useMemo(() => createVerificationPrompt(draft), [draft]);
+  const handoffSummary = useMemo(() => createHandoffSummary(draft), [draft]);
   const prompts: Record<PromptKind, string> = useMemo(
     () => ({
       plan: planPrompt,
       diff: diffPrompt,
       verification: verificationPrompt,
+      handoff: handoffSummary,
     }),
-    [diffPrompt, planPrompt, verificationPrompt],
+    [diffPrompt, handoffSummary, planPrompt, verificationPrompt],
   );
   const hasSuggestedFiles = draft.suggestedFiles.length > 0;
 
@@ -432,6 +456,7 @@ export default function CoworkPanel() {
     setPlanCopyState('idle');
     setDiffCopyState('idle');
     setVerificationCopyState('idle');
+    setHandoffCopyState('idle');
   }, [draft]);
 
   useEffect(() => {
@@ -497,7 +522,9 @@ export default function CoworkPanel() {
         ? setPlanCopyState
         : target === 'diff'
           ? setDiffCopyState
-          : setVerificationCopyState;
+          : target === 'verification'
+            ? setVerificationCopyState
+            : setHandoffCopyState;
     setActivePromptKind(target);
 
     if (copyTextFallback(text, promptPreviewRef.current)) {
@@ -540,6 +567,7 @@ export default function CoworkPanel() {
     setPlanCopyState('idle');
     setDiffCopyState('idle');
     setVerificationCopyState('idle');
+    setHandoffCopyState('idle');
   };
 
   const renderCopyLabel = (base: string, state: CopyState) => {
@@ -556,7 +584,9 @@ export default function CoworkPanel() {
       ? planCopyState
       : activePromptKind === 'diff'
         ? diffCopyState
-        : verificationCopyState;
+        : activePromptKind === 'verification'
+          ? verificationCopyState
+          : handoffCopyState;
 
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto px-4 py-4 text-sm">
@@ -611,6 +641,18 @@ export default function CoworkPanel() {
               verificationCopyState,
             )}
           </ActionButton>
+          <ActionButton onClick={() => void copyText(handoffSummary, 'handoff')}>
+            {handoffCopyState !== 'idle' ? (
+              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {renderCopyLabel(localize('com_ui_cowork_copy_handoff_summary'), handoffCopyState)}
+          </ActionButton>
+          <ActionButton onClick={() => setActive('code-workspace')}>
+            <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
+            {localize('com_ui_cowork_open_code')}
+          </ActionButton>
         </div>
 
         {!hasSuggestedFiles ? (
@@ -628,7 +670,7 @@ export default function CoworkPanel() {
       >
         <div className="space-y-2">
           <div
-            className="grid grid-cols-3 gap-1 rounded-md bg-surface-secondary p-1"
+            className="grid grid-cols-4 gap-1 rounded-md bg-surface-secondary p-1"
             role="tablist"
             aria-label={localize('com_ui_cowork_prompt_handoff')}
           >
