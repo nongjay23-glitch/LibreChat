@@ -1,6 +1,6 @@
 # Code Mode Handoff
 
-Last updated: 2026-06-29
+Last updated: 2026-06-30
 
 This file summarizes the custom Code mode work completed in this LibreChat-based workspace so a new chat can continue without re-reading the whole conversation.
 
@@ -9,10 +9,10 @@ This file summarizes the custom Code mode work completed in this LibreChat-based
 Build a Claude-like open source AI workspace on top of LibreChat with:
 
 - Chat as the main AI conversation surface.
-- Cowork for planning/workflow later.
+- Manual Cowork for planning/workflow.
 - Code for safe project-file context and AI-assisted patch review/apply.
 
-NotebookLM-style source workflows are intentionally deferred. The next major area after Code mode is Cowork.
+Manual Cowork is now complete for the current scope. Auto Cowork/Code remains deferred. The next major product area is NotebookLM-style Sources core, without Studio outputs.
 
 ## Current Local App
 
@@ -162,6 +162,7 @@ Diff prompt polish completed:
 
 Important recent commits:
 
+- `e9ffc5ac1 Add structured cowork code handoff`
 - `2ec982f77 Add workspace verification profiles`
 - `55886a421 Add workspace post-apply verification`
 - `01080ad24 Fix code history panel scrolling`
