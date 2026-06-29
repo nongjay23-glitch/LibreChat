@@ -387,6 +387,427 @@ Phase 6: Advanced Cowork
 - Current implementation starts the usability pass with a compact ready checklist, workflow status strip, and collapsed prompt handoff tools. Cowork remains frontend-only and read-only.
 - Current implementation also simplifies the primary Cowork surface around Goal, Next Action, Plan, and readiness. Scope, Files, Risks, Verification, and prompt tools are available in collapsed details instead of filling the first view.
 
+### Cowork Auto Roadmap
+
+Cowork auto should mean assisted planning, context preparation, diff preparation, and guarded handoff. It must not mean silent file writes. Code mode remains the only owner of file browsing, patch review, apply, checkpoint, restore, and verification.
+
+#### Automation Levels
+
+Level 0: Manual Cowork
+
+- Current state.
+- User edits Goal, Next Action, Plan, Details, and Prompt Handoff manually.
+- Cowork can copy prompts and open Code.
+- No backend route, file read, file attach, patch apply, checkpoint, restore, or verification action is initiated by Cowork.
+
+Level 1: Assisted Planning
+
+- Cowork can ask Chat/model to draft or refine a plan from the user's request.
+- Output must be structured into Goal, Scope, Plan, Files, Risks, Verification, and Next Action.
+- User must accept or edit the plan before file-changing work can continue.
+- If the request is unclear, Cowork asks one focused clarification question instead of guessing.
+
+Level 2: Read-only Context Suggestions
+
+- Cowork can consume safe workspace metadata from Code, such as selected file paths, safe tree paths, file sizes, and current Code tab state.
+- Cowork may suggest files to inspect or attach, but must not read hidden file contents or attach files by itself.
+- Blocked paths remain filtered: `.env`, token/password/credential paths, `.git`, `node_modules`, logs, uploads, database files, and large/binary files.
+
+Level 3: Structured Handoff To Code
+
+- `Prepare for Code` creates a handoff payload with Goal, Scope, suggested files, avoided paths, verification target, and strict diff rules.
+- Code can receive the payload and prefill the Changes prompt or Files guidance.
+- The user still chooses file context and confirms every apply action.
+- No patch is applied from Cowork.
+
+Level 4: Diff Dry Run
+
+- Cowork can request an AI-generated unified diff after the user confirms scope and file context.
+- The result lands in `Code > Changes` as a review-only patch.
+- Code validates diff format, blocked paths, changed file count, diff size, hunk safety, and stale context before any apply.
+- Failed validation produces a retry prompt rather than a write.
+
+Level 5: Confirmed Auto Apply
+
+- Code may offer an `Apply with checkpoint` action after policy checks pass.
+- User confirmation is required at action time.
+- Checkpoint creation is mandatory before write.
+- Verification must run after apply and record result in History.
+- Cowork may report status, but Code owns the write and verification path.
+
+Level 6: Limited Supervised Auto Mode
+
+- Only allowed for small, low-risk tasks.
+- Scope examples: one-file UI copy change, small TypeScript fix, formatting-only patch, narrow test update.
+- Hard limits must apply: allowlisted paths, maximum changed files, maximum diff size, no delete/rename/binary patch, no secret-like paths, mandatory checkpoint, mandatory verification.
+- If any guardrail fails, the system downgrades to manual review.
+
+#### Auto-Safe Architecture
+
+The recommended architecture is layered:
+
+- `CoworkPanel`
+  - Planning UI and status only.
+  - Shows Goal, Next Action, Plan, readiness, and handoff state.
+  - Does not call file write routes.
+- `Cowork draft store`
+  - Stores safe planning fields only.
+  - Must sanitize secret-like text before persistence.
+  - Starts as local storage; project/conversation persistence can come later.
+- `Context bridge`
+  - Read-only bridge from Code to Cowork.
+  - Shares selected paths, safe file metadata, and Code readiness state.
+  - Never exposes blocked file contents.
+- `Policy engine`
+  - Central guardrail checks shared by handoff, dry-run diff, and apply review.
+  - Enforces blocked paths, file limits, diff limits, and workflow order.
+- `Code handoff queue`
+  - Holds pending handoff payloads from Cowork to Code.
+  - Lets Code show exactly what Cowork requested before any file context or diff action.
+- `Verification gate`
+  - Requires selected verification profile before apply.
+  - Stores verification result in Code History.
+- `Activity history`
+  - Records plan creation, handoff, diff review, apply, checkpoint, restore, and verification.
+  - Useful for explaining what automation did and what it refused to do.
+
+#### Phase A: Finish Manual Cowork UX
+
+Goal:
+
+- Make Cowork understandable before adding automation.
+
+Implementation:
+
+- Add clearer empty state for a new task.
+- Add `New plan` or `Reset plan` wording that is less destructive than a generic reset.
+- Add reusable plan templates such as UI polish, bug fix, refactor, test update, documentation, and provider/model config.
+- Keep `Details` and `Prompt Handoff` collapsed by default.
+- Keep primary view focused on Goal, Next Action, Plan, and readiness.
+
+Acceptance:
+
+- A user can understand what Cowork does without reading the handoff document.
+- No new backend write routes.
+- No file content reads from Cowork.
+- Build passes and `/readyz` returns `OK`.
+
+Suggested commit:
+
+- `Polish cowork manual workflow`
+
+#### Phase B: Read-only Code Context Bridge
+
+Goal:
+
+- Let Cowork know enough about Code state to suggest next steps without owning file access.
+
+Implementation:
+
+- Expose safe Code state to Cowork:
+  - selected safe file paths
+  - current Code tab
+  - whether there is a pending diff
+  - latest verification status summary
+  - safe workspace metadata such as path, size, and text/binary flag
+- Keep path filtering centralized with Code safety rules.
+- Show Cowork hints like `Attach these files in Code > Files` or `Review pending diff in Code > Changes`.
+
+Acceptance:
+
+- Cowork can display file suggestions from safe metadata.
+- Cowork cannot open arbitrary files or read blocked content.
+- Secret-like and blocked paths do not appear in Cowork suggestions.
+- Code still owns actual file preview and attachment.
+
+Suggested commit:
+
+- `Add cowork read-only code context bridge`
+
+#### Phase C: Assisted Plan Generation
+
+Goal:
+
+- Let AI help draft a plan, while the user remains in control.
+
+Implementation:
+
+- Add `Draft plan` or `Refine plan` action that sends a structured planning prompt to Chat/model.
+- Require structured output:
+  - Goal
+  - Scope
+  - Plan
+  - Files
+  - Risks
+  - Verification
+  - Next Action
+- Validate generated draft before filling Cowork fields:
+  - no secrets
+  - no blocked paths
+  - no broad write instructions
+  - one focused clarification question if needed
+- Add user review step before accepting generated plan into the draft.
+
+Acceptance:
+
+- AI can populate a plan draft without file writes.
+- User can accept, edit, or discard the generated plan.
+- Blocked paths and secret-like text are removed or rejected.
+- Unclear tasks produce a question instead of fake certainty.
+
+Suggested commit:
+
+- `Add cowork assisted planning`
+
+#### Phase D: Structured Plan-To-Code Handoff
+
+Goal:
+
+- Turn the Cowork plan into a typed handoff that Code can understand.
+
+Implementation:
+
+- Define a handoff payload:
+  - handoff id
+  - source conversation id when available
+  - goal
+  - scope
+  - exclusions
+  - suggested files
+  - inspect files
+  - avoid paths
+  - verification target
+  - next action
+  - timestamp
+- Add `Prepare for Code` behavior:
+  - stores the handoff payload
+  - opens Code
+  - shows the handoff in Code as read-only context
+- Code may offer actions such as:
+  - attach suggested files
+  - open Files tab
+  - prepare diff prompt
+  - review pending diff
+
+Acceptance:
+
+- Handoff moves structured data, not only copied text.
+- User sees the handoff before taking Code actions.
+- Cowork still cannot attach files or apply patches.
+- Handoff can be cleared or replaced.
+
+Suggested commit:
+
+- `Add structured cowork code handoff`
+
+#### Phase E: Diff Dry Run
+
+Goal:
+
+- Let AI generate a diff, but keep it review-only until Code approves it.
+
+Implementation:
+
+- Add dry-run flow:
+  - Cowork plan confirmed
+  - Code files attached by user
+  - AI generates unified diff
+  - diff lands in `Code > Changes`
+  - Code validates and previews it
+- Add policy checks before review:
+  - valid unified diff
+  - no delete/rename/binary patch
+  - no blocked paths
+  - changed file count within limit
+  - diff size within limit
+  - hunks have enough context
+  - stale context warning if applicable
+- Failed policy produces a retry prompt.
+
+Acceptance:
+
+- AI-generated patch never applies directly.
+- Invalid or risky patches stay in review/error state.
+- User can inspect touched files, additions/removals, warnings, and validation status.
+
+Suggested commit:
+
+- `Add cowork diff dry run`
+
+#### Phase F: Guardrail Policy Engine
+
+Goal:
+
+- Centralize safety rules so Cowork, Code, and future automation use the same policy.
+
+Implementation:
+
+- Extract or formalize policy checks:
+  - blocked path patterns
+  - allowlisted write roots
+  - max changed files
+  - max diff size
+  - max hunk count
+  - no binary/delete/rename patches
+  - no secret-like content in drafts or prompts
+  - mandatory checkpoint before writes
+  - mandatory verification after writes
+- Return structured policy results:
+  - `passed`
+  - `warning`
+  - `blocked`
+  - machine-readable reasons
+  - user-facing explanation
+- Show policy results in Code review and Cowork status.
+
+Acceptance:
+
+- Every automated step can explain why it is allowed or blocked.
+- Policy results are visible before apply.
+- No duplicated safety logic between Cowork and Code where shared policy is practical.
+
+Suggested commit:
+
+- `Add workspace automation policy checks`
+
+#### Phase G: Confirmed Auto Apply
+
+Goal:
+
+- Allow one-click supervised apply only after review and policy pass.
+
+Implementation:
+
+- Add an explicit confirmation modal in Code:
+  - files changed
+  - additions/removals
+  - policy result
+  - checkpoint plan
+  - verification profile
+- Require user confirmation.
+- Create checkpoint before write.
+- Apply patch through existing safe route.
+- Run selected verification.
+- Record result in History.
+- Report result back to Cowork as status.
+
+Acceptance:
+
+- No apply happens without user confirmation.
+- Failed checkpoint blocks apply.
+- Failed verification is shown as failure, not success.
+- User can restore from checkpoint.
+
+Suggested commit:
+
+- `Add confirmed workspace auto apply`
+
+#### Phase H: Limited Supervised Auto Mode
+
+Goal:
+
+- Make simple tasks feel automatic while preserving review, checkpoint, and verification.
+
+Implementation:
+
+- Add opt-in mode such as `Auto assist`.
+- Limit supported task classes:
+  - single-file UI text polish
+  - small style-only component changes
+  - narrow bug fix with attached context
+  - test-only update
+  - documentation-only update
+- Enforce hard caps:
+  - allowlisted files only
+  - max 1-3 changed files
+  - max diff size
+  - no backend route changes unless explicitly confirmed
+  - no config/secret/provider credential files
+  - no deletes/renames
+- If the task exceeds limits, downgrade to normal Code review.
+
+Acceptance:
+
+- Auto assist can complete a small task end-to-end with explicit user confirmation before apply.
+- Larger or risky tasks are refused or downgraded.
+- History explains each automated step and guardrail decision.
+
+Suggested commit:
+
+- `Add limited cowork auto assist`
+
+#### Phase I: Recovery, Audit, And Trust
+
+Goal:
+
+- Make automation understandable and reversible.
+
+Implementation:
+
+- Add an automation timeline:
+  - plan created
+  - context selected
+  - diff requested
+  - policy checked
+  - checkpoint created
+  - patch applied
+  - verification result
+  - restore action if needed
+- Add `Why blocked?` details for refused automation.
+- Add `Retry with narrower scope` prompt generation.
+- Add restore-first recovery guidance after failed verification.
+
+Acceptance:
+
+- User can tell what automation did and what it did not do.
+- User can restore after a bad apply.
+- Automation failures produce actionable next steps.
+
+Suggested commit:
+
+- `Add cowork automation audit trail`
+
+#### Minimum Bar Before Auto Write
+
+Do not implement confirmed auto apply until all of these are true:
+
+- Code patch apply route is stable.
+- Checkpoint restore is stable.
+- Verification profiles are stable.
+- Cowork-to-Code handoff is structured, visible, and clearable.
+- Policy engine blocks risky paths and risky patch types.
+- Browser smoke tests cover Cowork handoff and Code apply review.
+- User confirmation is required at apply time.
+- Failed verification is recorded and visible.
+- Restore path is tested after an applied patch.
+
+#### First Auto Candidate
+
+The first real auto candidate should be deliberately small:
+
+```text
+User request -> Cowork drafts plan -> user accepts -> Code attaches one safe file -> AI returns a one-file diff -> Code validates -> user confirms apply -> checkpoint -> Fast verification -> History result
+```
+
+Good first task class:
+
+- one `.tsx` UI copy/layout change
+- no backend changes
+- no config files
+- one or two hunks
+- Fast verification only
+
+Bad first task class:
+
+- provider config
+- auth
+- secret handling
+- database migration
+- multi-file refactor
+- dependency upgrades
+- Docker/startup changes
+- anything that needs direct terminal execution from Cowork
+
 ### Acceptance Criteria
 
 Cowork first pass is acceptable when:
