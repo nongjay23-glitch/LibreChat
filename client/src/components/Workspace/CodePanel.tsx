@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   ChevronRight,
+  ClipboardList,
   Code2,
   Copy,
   FileText,
@@ -26,7 +27,9 @@ import {
   formatBytes,
   getTextBytes,
 } from '~/common';
+import { useLocalize } from '~/hooks';
 import store from '~/store';
+import type { CoworkCodeHandoff } from '~/store/families';
 
 type WorkspaceStatus = {
   enabled: boolean;
@@ -119,6 +122,8 @@ type RequestError = Error & {
   };
 };
 
+type CodeCopyState = 'idle' | 'copied' | 'failed';
+
 const getRequestErrorMessage = (err: unknown, fallback: string) => {
   if (err instanceof Error) {
     return (err as RequestError).response?.data?.message || err.message;
@@ -167,6 +172,45 @@ const getVerificationClassName = (status: WorkspaceVerification['status']) => {
 
 const formatCheckpointId = (checkpointId: string) =>
   checkpointId.replace('T', ' ').replace(/-\d{3}Z$/, 'Z');
+
+const formatHandoffCreatedAt = (createdAt: string) => {
+  const date = new Date(createdAt);
+
+  if (Number.isNaN(date.getTime())) {
+    return createdAt;
+  }
+
+  return date.toLocaleString();
+};
+
+const getHandoffFiles = (handoff: CoworkCodeHandoff) =>
+  Array.from(new Set([...handoff.suggestedFiles, ...handoff.inspectFiles])).filter(Boolean);
+
+const writeClipboard = (text: string) =>
+  Promise.race([
+    navigator.clipboard.writeText(text),
+    new Promise<never>((_, reject) => {
+      window.setTimeout(() => reject(new Error('Clipboard write timed out')), 1000);
+    }),
+  ]);
+
+const copyTextFallback = (text: string) => {
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.setAttribute('readonly', '');
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-9999px';
+  textArea.style.top = '0';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    return document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textArea);
+  }
+};
 
 const CODE_SECTIONS: Array<{ id: CodeSection; label: string }> = [
   { id: 'files', label: 'Files' },
@@ -293,6 +337,7 @@ const parseUnifiedDiff = (patchText: string) => {
 };
 
 export default function CodePanel() {
+  const localize = useLocalize();
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
   const [activeCodeSection, setActiveCodeSection] = useState<CodeSection>('files');
   const [currentPath, setCurrentPath] = useState('');
@@ -304,6 +349,7 @@ export default function CodePanel() {
   const [isLoadingFile, setIsLoadingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [handoffCopyState, setHandoffCopyState] = useState<CodeCopyState>('idle');
   const [sendState, setSendState] = useState<'idle' | 'attached'>('idle');
   const [contextState, setContextState] = useState<
     'idle' | 'added' | 'limit' | 'attached' | 'copied'
@@ -345,6 +391,7 @@ export default function CodePanel() {
   const [pendingWorkspacePatch, setPendingWorkspacePatch] = useRecoilState(
     store.pendingWorkspacePatchByIndex(0),
   );
+  const [coworkHandoff, setCoworkHandoff] = useRecoilState(store.coworkCodeHandoffByIndex(0));
 
   const pathParts = useMemo(() => currentPath.split('/').filter(Boolean), [currentPath]);
   const normalizedFileSearch = fileSearch.trim().toLowerCase();
@@ -368,6 +415,14 @@ export default function CodePanel() {
   const selectedPaths = useMemo(
     () => new Set(selectedContextFiles.map((file) => file.path)),
     [selectedContextFiles],
+  );
+  const handoffFiles = useMemo(
+    () => (coworkHandoff ? getHandoffFiles(coworkHandoff) : []),
+    [coworkHandoff],
+  );
+  const handoffCreatedAt = useMemo(
+    () => (coworkHandoff ? formatHandoffCreatedAt(coworkHandoff.createdAt) : ''),
+    [coworkHandoff],
   );
   const patchPreview = useMemo(() => parseUnifiedDiff(patchText), [patchText]);
   const patchTotals = useMemo(
@@ -505,6 +560,10 @@ export default function CodePanel() {
     setPendingWorkspacePatch(null);
   }, [pendingWorkspacePatch, setPendingWorkspacePatch]);
 
+  useEffect(() => {
+    setHandoffCopyState('idle');
+  }, [coworkHandoff?.id]);
+
   const loadCheckpoints = useCallback(async () => {
     setIsLoadingCheckpoints(true);
     try {
@@ -628,6 +687,29 @@ export default function CodePanel() {
     } catch {
       setPatchPromptCopyState('failed');
     }
+  };
+
+  const copyCoworkHandoff = async () => {
+    if (!coworkHandoff) {
+      return;
+    }
+
+    if (copyTextFallback(coworkHandoff.summary)) {
+      setHandoffCopyState('copied');
+      return;
+    }
+
+    try {
+      await writeClipboard(coworkHandoff.summary);
+      setHandoffCopyState('copied');
+    } catch {
+      setHandoffCopyState('failed');
+    }
+  };
+
+  const clearCoworkHandoff = () => {
+    setCoworkHandoff(null);
+    setHandoffCopyState('idle');
   };
 
   const applyPatch = async () => {
@@ -762,6 +844,31 @@ export default function CodePanel() {
     }
   };
 
+  const renderHandoffList = (items: string[]) => {
+    if (items.length === 0) {
+      return (
+        <div className="text-xs leading-5 text-text-tertiary">
+          {localize('com_ui_code_cowork_handoff_none')}
+        </div>
+      );
+    }
+
+    return (
+      <ul className="space-y-1 text-xs leading-5 text-text-secondary">
+        {items.slice(0, 4).map((item) => (
+          <li key={item} className="break-words">
+            {item}
+          </li>
+        ))}
+        {items.length > 4 ? (
+          <li className="text-text-tertiary">
+            {localize('com_ui_code_cowork_handoff_more', { 0: String(items.length - 4) })}
+          </li>
+        ) : null}
+      </ul>
+    );
+  };
+
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-hidden px-4 py-4 text-sm">
       <div>
@@ -799,6 +906,96 @@ export default function CodePanel() {
           ))}
         </div>
       </div>
+
+      {coworkHandoff ? (
+        <div className="rounded-lg border border-blue-500/25 bg-blue-500/5 p-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
+                <ClipboardList className="h-4 w-4 shrink-0 text-blue-500" aria-hidden="true" />
+                {localize('com_ui_code_cowork_handoff')}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">
+                {localize('com_ui_code_cowork_handoff_help')}
+              </p>
+              <div className="mt-1 text-[11px] text-text-tertiary">
+                {localize('com_ui_code_cowork_handoff_created', { 0: handoffCreatedAt })}
+              </div>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-border-light bg-surface-secondary px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:bg-surface-hover"
+                onClick={() => setActiveCodeSection('files')}
+              >
+                {localize('com_ui_code_cowork_handoff_open_files')}
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-border-light bg-surface-secondary px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:bg-surface-hover"
+                onClick={() => setActiveCodeSection('changes')}
+              >
+                {localize('com_ui_code_cowork_handoff_open_changes')}
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-border-light bg-surface-secondary px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:bg-surface-hover"
+                onClick={() => void copyCoworkHandoff()}
+              >
+                {handoffCopyState === 'copied'
+                  ? localize('com_ui_code_cowork_handoff_copied')
+                  : handoffCopyState === 'failed'
+                    ? localize('com_ui_code_cowork_handoff_copy_failed')
+                    : localize('com_ui_code_cowork_handoff_copy')}
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-border-light bg-surface-secondary px-2.5 py-1.5 text-xs font-semibold text-text-primary hover:bg-surface-hover"
+                onClick={clearCoworkHandoff}
+              >
+                {localize('com_ui_code_cowork_handoff_clear')}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-text-primary">
+                {localize('com_ui_code_cowork_handoff_goal')}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">
+                {coworkHandoff.goal || localize('com_ui_code_cowork_handoff_none')}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-text-primary">
+                {localize('com_ui_code_cowork_handoff_next_action')}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-text-secondary">
+                {coworkHandoff.nextAction || localize('com_ui_code_cowork_handoff_none')}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-text-primary">
+                {localize('com_ui_code_cowork_handoff_scope')}
+              </div>
+              <div className="mt-1">{renderHandoffList(coworkHandoff.scope)}</div>
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-text-primary">
+                {localize('com_ui_code_cowork_handoff_files')}
+              </div>
+              <div className="mt-1">{renderHandoffList(handoffFiles)}</div>
+            </div>
+            <div className="min-w-0 lg:col-span-2">
+              <div className="text-xs font-semibold text-text-primary">
+                {localize('com_ui_code_cowork_handoff_verification')}
+              </div>
+              <div className="mt-1">{renderHandoffList(coworkHandoff.verification)}</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {false && (
       <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-3">

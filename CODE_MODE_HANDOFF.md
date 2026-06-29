@@ -381,7 +381,7 @@ Phase 5: Code workflow integration
 - Prepare a handoff summary that tells the user which files to attach and what diff to request.
 - Keep the file-changing path as `Review in Code -> Apply -> Checkpoint -> Verification`.
 - Do not let Cowork apply patches, create checkpoints, restore files, or bypass confirmation.
-- Current implementation adds a read-only `Open Code` action and a `Copy handoff summary` prompt. It only switches the active workspace tab or copies text; it does not attach files, apply patches, or call backend write routes.
+- Current implementation adds a read-only `Open Code` action, a `Copy handoff summary` prompt, and a frontend-only structured handoff payload that Code can display as read-only context. It can switch tabs, copy text, store the handoff in client state, or clear the handoff; it does not attach files, apply patches, create checkpoints, verify, or call backend write routes.
 - Suggested commit after verification: `Connect cowork handoff to code workflow`.
 
 Phase 6: Advanced Cowork
@@ -493,7 +493,7 @@ Implementation:
 - Add reusable plan templates such as UI polish, bug fix, refactor, test update, documentation, and provider/model config.
 - Keep `Details` and `Prompt Handoff` collapsed by default.
 - Keep primary view focused on Goal, Next Action, Plan, and readiness.
-- Current implementation keeps this phase manual-only: templates fill safe planning fields, real file paths still come from the user, `Prepare for Code` only copies a handoff prompt, and `Open Code` only switches to Code mode.
+- Current implementation keeps this phase manual-only: templates fill safe planning fields, real file paths still come from the user, `Prepare for Code` stores a client-side read-only handoff and copies the handoff prompt, and `Open Code` only switches to Code mode.
 - Manual workflow smoke test completed: Cowork can plan a docs update, hand it to Code, and Code can review/apply the resulting diff with checkpoint and verification.
 
 Acceptance:
@@ -592,8 +592,9 @@ Implementation:
   - timestamp
 - Add `Prepare for Code` behavior:
   - stores the handoff payload
-  - opens Code
+  - lets the user open Code
   - shows the handoff in Code as read-only context
+- Current implementation starts this phase with a frontend-only Recoil handoff. Code shows Goal, Scope, Files, Verification, and Next Action, with manual buttons to open Files, open Changes, copy the handoff, or clear it. It does not attach suggested files automatically or prefill a patch.
 - Code may offer actions such as:
   - attach suggested files
   - open Files tab

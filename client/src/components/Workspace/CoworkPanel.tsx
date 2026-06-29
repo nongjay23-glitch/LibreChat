@@ -15,11 +15,13 @@ import {
   Target,
   Trash2,
 } from 'lucide-react';
+import { useSetRecoilState } from 'recoil';
 import type { LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { TranslationKeys } from '~/hooks';
 import { useActivePanel } from '~/Providers';
 import { useLocalize } from '~/hooks';
+import store from '~/store';
 import { cn } from '~/utils';
 
 type PlanStatus = 'todo' | 'doing' | 'done' | 'blocked';
@@ -449,6 +451,31 @@ const createHandoffSummary = (draft: CoworkDraft) =>
     `Next Action:\n${draft.nextAction || 'Open Code > Files and attach the suggested files.'}`,
   ].join('\n');
 
+const createHandoffPayload = (draft: CoworkDraft) => {
+  const safeDraft = sanitizeDraftForStorage(draft);
+
+  return {
+    id: `cowork-${createStepId()}`,
+    createdAt: new Date().toISOString(),
+    goal: safeDraft.goal,
+    scope: safeDraft.scope,
+    exclusions: safeDraft.exclusions,
+    steps: safeDraft.steps
+      .filter((step) => step.title.trim())
+      .map((step) => ({
+        title: step.title,
+        status: step.status,
+      })),
+    inspectFiles: safeDraft.inspectFiles,
+    suggestedFiles: safeDraft.suggestedFiles,
+    avoidFiles: safeDraft.avoidFiles,
+    risks: safeDraft.risks,
+    verification: safeDraft.verification,
+    nextAction: safeDraft.nextAction,
+    summary: createHandoffSummary(safeDraft),
+  };
+};
+
 const getReadiness = (draft: CoworkDraft): CoworkReadiness => {
   const hasGoal = draft.goal.trim().length > 0;
   const hasScope = draft.scope.length > 0 || draft.exclusions.length > 0;
@@ -636,6 +663,7 @@ function ActionButton({
 export default function CoworkPanel() {
   const localize = useLocalize();
   const { setActive } = useActivePanel();
+  const setCoworkCodeHandoff = useSetRecoilState(store.coworkCodeHandoffByIndex(0));
   const promptPreviewRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState<CoworkDraft>(() => loadStoredDraft());
   const [activePromptKind, setActivePromptKind] = useState<PromptKind>('plan');
@@ -746,6 +774,12 @@ export default function CoworkPanel() {
     replaceDraft(createTemplateDraft(templateId, localize));
   };
 
+  const prepareForCode = () => {
+    const handoff = createHandoffPayload(draft);
+    setCoworkCodeHandoff(handoff);
+    void copyText(handoff.summary, 'handoff');
+  };
+
   const copyText = async (text: string, target: PromptKind) => {
     const setState =
       target === 'plan'
@@ -836,7 +870,7 @@ export default function CoworkPanel() {
             )}
             {renderCopyLabel(localize('com_ui_cowork_refine_plan'), planCopyState)}
           </ActionButton>
-          <ActionButton onClick={() => void copyText(handoffSummary, 'handoff')}>
+          <ActionButton onClick={prepareForCode}>
             {handoffCopyState !== 'idle' ? (
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
             ) : (

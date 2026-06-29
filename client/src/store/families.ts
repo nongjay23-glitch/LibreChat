@@ -27,6 +27,25 @@ import {
 } from '~/utils';
 import { useSetConvoContext } from '~/Providers/SetConvoContext';
 
+export type CoworkCodeHandoff = {
+  id: string;
+  createdAt: string;
+  goal: string;
+  scope: string[];
+  exclusions: string[];
+  steps: Array<{
+    title: string;
+    status: string;
+  }>;
+  inspectFiles: string[];
+  suggestedFiles: string[];
+  avoidFiles: string[];
+  risks: string[];
+  verification: string[];
+  nextAction: string;
+  summary: string;
+};
+
 const submissionKeysAtom = atom<(string | number)[]>({
   key: 'submissionKeys',
   default: [],
@@ -322,6 +341,11 @@ const pendingWorkspacePatchByIndex = atomFamily<string | null, string | number |
   default: null,
 });
 
+const coworkCodeHandoffByIndex = atomFamily<CoworkCodeHandoff | null, string | number | null>({
+  key: 'coworkCodeHandoffByIndex',
+  default: null,
+});
+
 const globalAudioURLFamily = atomFamily<string | null, string | number | null>({
   key: 'globalAudioURLByIndex',
   default: null,
@@ -490,5 +514,6 @@ export default {
   pendingQuotesByConvoId,
   pendingCodeContextByConvoId,
   pendingWorkspacePatchByIndex,
+  coworkCodeHandoffByIndex,
   updateConversationSelector,
 };
