@@ -334,6 +334,55 @@ Recommended first coding slice:
 4. Add a `Send diff prompt to Chat` or `Prepare diff request` action only after the plan has at least one suggested file.
 5. Keep all actions read-only. No backend write route should be added for Cowork in this slice.
 
+### Cowork Roadmap
+
+Phase 1: Cowork first slice
+
+- Build a compact frontend-only planning workspace in `CoworkPanel`.
+- Support editable `Goal`, `Scope`, `Plan`, `Files`, `Risks`, `Verification`, and `Next Action`.
+- Add `Copy plan prompt`.
+- Add `Prepare diff request` as a read-only prompt action that requires at least one suggested file.
+- Do not persist drafts, add backend routes, or write files from Cowork.
+- Suggested commit after verification: `Add cowork planning workspace`.
+
+Phase 2: Chat handoff polish
+
+- Refine prompt wording for the Claude-like Chat -> Cowork -> Code workflow.
+- Add clear copied/prepared states for prompt actions.
+- Add reusable planning, diff request, and verification prompt templates.
+- Keep handoff read-only unless an existing safe chat integration is already available.
+- Suggested commit after verification: `Polish cowork prompt handoff`.
+
+Phase 3: File context guidance
+
+- Expand `Files` into suggested `Inspect`, `Attach`, and `Avoid` groups.
+- Warn against sensitive or blocked paths such as `.env`, token/password/credential files, `.git`, `node_modules`, logs, uploads, and database files.
+- Point users to `Code > Files` for actual file context attachment.
+- Do not let Cowork browse or attach files directly in this phase.
+- Suggested commit after verification: `Add cowork file context guidance`.
+
+Phase 4: Plan persistence
+
+- Decide whether first persistence should use local storage or conversation/project metadata.
+- Add save, load, and reset behavior for Cowork drafts.
+- Keep secrets and blocked path content out of saved plans.
+- Suggested commit after verification: `Persist cowork drafts`.
+
+Phase 5: Code workflow integration
+
+- Add an explicit `Open Code` or equivalent handoff action.
+- Prepare a handoff summary that tells the user which files to attach and what diff to request.
+- Keep the file-changing path as `Review in Code -> Apply -> Checkpoint -> Verification`.
+- Do not let Cowork apply patches, create checkpoints, restore files, or bypass confirmation.
+- Suggested commit after verification: `Connect cowork handoff to code workflow`.
+
+Phase 6: Advanced Cowork
+
+- Add task history and handoff summary generation for new chats.
+- Add reusable plan templates.
+- Consider optional project memory or NotebookLM-style source workflows only after Cowork and Code are stable.
+- Keep broad agent autonomy out of scope unless a separate safety design is approved.
+
 ### Acceptance Criteria
 
 Cowork first pass is acceptable when:
