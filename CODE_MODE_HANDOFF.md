@@ -194,6 +194,12 @@ Remaining optional polish:
 
 ## Next Planned Area
 
+Current chat scope:
+
+- Keep working on Manual Cowork only.
+- Allowed work here: manual Cowork UI polish, prompt handoff polish, Details/Plan/Ready checklist improvements, browser smoke tests, and verified commits.
+- Do not start Cowork Auto work in this chat.
+
 Do not start this yet unless requested:
 
 - Continue with `Cowork` mode.
@@ -388,6 +394,8 @@ Phase 6: Advanced Cowork
 - Current implementation also simplifies the primary Cowork surface around Goal, Next Action, Plan, and readiness. Scope, Files, Risks, Verification, and prompt tools are available in collapsed details instead of filling the first view.
 
 ### Cowork Auto Roadmap
+
+This roadmap is for a new chat after Manual Cowork is stable. Do not start these automation phases while finishing the current Manual Cowork scope.
 
 Cowork auto should mean assisted planning, context preparation, diff preparation, and guarded handoff. It must not mean silent file writes. Code mode remains the only owner of file browsing, patch review, apply, checkpoint, restore, and verification.
 
