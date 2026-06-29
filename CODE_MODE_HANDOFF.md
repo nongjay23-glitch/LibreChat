@@ -200,6 +200,162 @@ Do not start this yet unless requested:
 - Cowork should build on the Code safety model instead of bypassing it.
 - Cowork should guide planning, task breakdown, project context, and human confirmation before any file writes.
 
+## Cowork Mode Plan
+
+Cowork is the next major workflow after Code mode. The reference behavior is Claude-style planning and collaboration: the user talks in Chat, Cowork turns the request into a concrete plan, and Code remains the only path that can prepare or apply file changes.
+
+### Goal
+
+Cowork should become the planning layer between Chat and Code:
+
+- Clarify what the user wants before touching files.
+- Split large work into small, reviewable steps.
+- Identify likely files and risks.
+- Prepare a safe prompt for AI diff generation.
+- Hand the user to Code mode for file context, patch review, apply, checkpoint, and verification.
+
+Cowork must not become a second code editor or a hidden automation layer.
+
+### Non-Goals For First Cowork Pass
+
+- Do not add direct terminal execution from Cowork.
+- Do not let Cowork write, delete, rename, upload, or move files directly.
+- Do not build real-time multiplayer collaboration yet.
+- Do not start NotebookLM-style source/RAG workflows yet.
+- Do not add broad agent autonomy. Human confirmation remains required.
+
+### Primary User Flow
+
+The first usable Cowork workflow should be:
+
+```text
+Chat request -> Cowork plan -> user confirms scope -> choose files/context -> ask AI for diff -> Review in Code -> Apply with checkpoint -> Verify -> History
+```
+
+If a user starts directly in Cowork, the flow is:
+
+```text
+Cowork request -> plan draft -> file/context suggestions -> user confirms -> Code mode handles patch work
+```
+
+### Cowork UI Sections
+
+Keep headings in English and supporting explanations in Thai where useful.
+
+Recommended sections for the first implementation:
+
+- `Goal`
+  - One short statement of what the current task is trying to achieve.
+- `Scope`
+  - What is included.
+  - What is explicitly excluded.
+- `Plan`
+  - Ordered steps.
+  - Each step should have a checkable status such as `todo`, `doing`, `done`, or `blocked`.
+- `Files`
+  - Suggested files to inspect or attach.
+  - This should link users toward Code mode file context, not read hidden files by itself.
+- `Risks`
+  - Known risks such as model diff quality, stale context, sensitive files, or build impact.
+- `Verification`
+  - Suggested checks after apply: Fast, Normal, Strict, build, readyz, or UI smoke.
+- `Next Action`
+  - The one action the user should take next, such as open Code, attach files, ask AI for diff, or review patch.
+
+Avoid long always-visible documentation panels. Use compact cards, disclosure sections, or tabbed subviews.
+
+### Required Safety Rules
+
+- Cowork can suggest actions, but Code mode owns file browsing, patch review, apply, checkpoint, restore, and verification.
+- Cowork must not bypass the Code mode safety model.
+- Cowork should never request or display secrets, API keys, `.env`, tokens, passwords, credentials, `.git`, `node_modules`, logs, uploads, or database files.
+- Before any file-changing step, Cowork must produce a human-readable plan and wait for user confirmation.
+- If the task is unclear, Cowork should ask one focused question instead of guessing.
+- If the user asks for broad or risky edits, Cowork should narrow the scope before sending anything to Code.
+
+### AI Prompt Strategy
+
+Cowork should help produce better model prompts. The prompt should:
+
+- State the goal.
+- List the relevant files attached from Code mode.
+- Say which file changes are in scope.
+- Ask for a unified diff only when the user is ready for Code mode.
+- Include the strict diff rules already used in Code mode:
+  - return only unified diff
+  - use latest attached file content as source of truth
+  - include `diff --git`, `---`, `+++`, and valid `@@` hunks
+  - keep hunks small with context
+  - avoid blocked paths
+
+For Qwen3.6 35B A3B Passport, apply the Thai-writing guard only to user-facing Thai explanations. Patch syntax and code must stay exact.
+
+### Data Model For First Pass
+
+A simple frontend-only Cowork draft is enough for the first pass. Suggested shape:
+
+```ts
+type CoworkDraft = {
+  goal: string;
+  scope: string[];
+  exclusions: string[];
+  steps: Array<{
+    id: string;
+    title: string;
+    status: 'todo' | 'doing' | 'done' | 'blocked';
+  }>;
+  suggestedFiles: string[];
+  risks: string[];
+  verification: string[];
+  nextAction: string;
+};
+```
+
+Persisting Cowork drafts can come later. First pass can use React state unless the user asks for saved project plans.
+
+### Integration With Existing Code Mode
+
+Reuse what already works:
+
+- File context should still be created in `Code > Files`.
+- AI-produced diffs should still enter through `Review in Code`.
+- Patch apply should still go through `Code > Changes`.
+- Checkpoints, restore, and verification should stay in `Code > History`.
+
+Cowork should point to these workflows instead of duplicating them.
+
+### First Implementation Slice
+
+Recommended first coding slice:
+
+1. Replace the current static `CoworkPanel` content with a compact plan workspace.
+2. Add editable/clearable Cowork draft fields for Goal, Scope, Plan, Files, Risks, Verification, and Next Action.
+3. Add a `Copy plan prompt` action that copies a structured planning prompt for the current chat model.
+4. Add a `Send diff prompt to Chat` or `Prepare diff request` action only after the plan has at least one suggested file.
+5. Keep all actions read-only. No backend write route should be added for Cowork in this slice.
+
+### Acceptance Criteria
+
+Cowork first pass is acceptable when:
+
+- The tab is useful without reading long instructions.
+- The user can see the current goal and next action at a glance.
+- The user can turn a rough request into a scoped plan.
+- Cowork can produce a prompt that asks AI for a plan or for a diff safely.
+- Cowork does not write files directly.
+- Code mode still owns diff review/apply/checkpoint/verification.
+- The app builds and `/readyz` returns `OK`.
+
+### Later Cowork Enhancements
+
+After the first pass:
+
+- Save Cowork plans per conversation/project.
+- Add task status history.
+- Add a handoff summary generator for new chats.
+- Add a better file suggestion flow using the workspace tree.
+- Add optional project memory or NotebookLM-style source mode after Cowork and Code are stable.
+
 ## How To Continue In A New Chat
 
 Start by reading:
