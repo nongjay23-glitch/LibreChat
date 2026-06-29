@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -7,6 +7,7 @@ import {
   FileText,
   FolderOpen,
   ListChecks,
+  MessageSquareText,
   Plus,
   ShieldCheck,
   Target,
@@ -20,6 +21,7 @@ import { cn } from '~/utils';
 
 type PlanStatus = 'todo' | 'doing' | 'done' | 'blocked';
 type CopyState = 'idle' | 'copied' | 'failed';
+type PromptKind = 'plan' | 'diff' | 'verification';
 
 type CoworkStep = {
   id: string;
@@ -41,11 +43,17 @@ type CoworkDraft = {
 type ListField = Exclude<keyof CoworkDraft, 'goal' | 'steps' | 'nextAction'>;
 
 const statusOptions: PlanStatus[] = ['todo', 'doing', 'done', 'blocked'];
+const promptKinds: PromptKind[] = ['plan', 'diff', 'verification'];
 const statusLabelKeys: Record<PlanStatus, TranslationKeys> = {
   todo: 'com_ui_cowork_status_todo',
   doing: 'com_ui_cowork_status_doing',
   done: 'com_ui_cowork_status_done',
   blocked: 'com_ui_cowork_status_blocked',
+};
+const promptLabelKeys: Record<PromptKind, TranslationKeys> = {
+  plan: 'com_ui_cowork_prompt_plan',
+  diff: 'com_ui_cowork_prompt_diff',
+  verification: 'com_ui_cowork_prompt_verification',
 };
 
 const createStepId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -151,6 +159,22 @@ const createDiffPrompt = (draft: CoworkDraft) =>
     `Verification target:\n${formatList(draft.verification)}`,
   ].join('\n');
 
+const createVerificationPrompt = (draft: CoworkDraft) =>
+  [
+    'Review the result after Code applies the patch.',
+    'Do not request new file writes unless verification clearly fails.',
+    'Use English section headings: Result, Checks, Issues, Next Action.',
+    'If a fix is needed, ask for a new small unified diff that stays inside the original scope.',
+    '',
+    `Goal:\n${draft.goal || 'TBD'}`,
+    '',
+    `Files expected to be changed:\n${formatList(draft.suggestedFiles)}`,
+    '',
+    `Verification checks to run or inspect:\n${formatList(draft.verification)}`,
+    '',
+    `Known risks:\n${formatList(draft.risks)}`,
+  ].join('\n');
+
 function FieldShell({
   title,
   description,
@@ -234,12 +258,35 @@ function ActionButton({
 export default function CoworkPanel() {
   const localize = useLocalize();
   const [draft, setDraft] = useState<CoworkDraft>(() => createDefaultDraft());
+  const [activePromptKind, setActivePromptKind] = useState<PromptKind>('plan');
   const [planCopyState, setPlanCopyState] = useState<CopyState>('idle');
   const [diffCopyState, setDiffCopyState] = useState<CopyState>('idle');
+  const [verificationCopyState, setVerificationCopyState] = useState<CopyState>('idle');
 
   const planPrompt = useMemo(() => createPlanPrompt(draft), [draft]);
   const diffPrompt = useMemo(() => createDiffPrompt(draft), [draft]);
+  const verificationPrompt = useMemo(() => createVerificationPrompt(draft), [draft]);
+  const prompts: Record<PromptKind, string> = useMemo(
+    () => ({
+      plan: planPrompt,
+      diff: diffPrompt,
+      verification: verificationPrompt,
+    }),
+    [diffPrompt, planPrompt, verificationPrompt],
+  );
   const hasSuggestedFiles = draft.suggestedFiles.length > 0;
+
+  useEffect(() => {
+    setPlanCopyState('idle');
+    setDiffCopyState('idle');
+    setVerificationCopyState('idle');
+  }, [draft]);
+
+  useEffect(() => {
+    if (!hasSuggestedFiles && activePromptKind === 'diff') {
+      setActivePromptKind('plan');
+    }
+  }, [activePromptKind, hasSuggestedFiles]);
 
   const updateListField = (field: ListField, value: string) => {
     setDraft((current) => ({ ...current, [field]: splitLines(value) }));
@@ -277,8 +324,13 @@ export default function CoworkPanel() {
     }));
   };
 
-  const copyText = async (text: string, target: 'plan' | 'diff') => {
-    const setState = target === 'plan' ? setPlanCopyState : setDiffCopyState;
+  const copyText = async (text: string, target: PromptKind) => {
+    const setState =
+      target === 'plan'
+        ? setPlanCopyState
+        : target === 'diff'
+          ? setDiffCopyState
+          : setVerificationCopyState;
     try {
       await navigator.clipboard.writeText(text);
       setState('copied');
@@ -289,8 +341,10 @@ export default function CoworkPanel() {
 
   const resetDraft = () => {
     setDraft(createDefaultDraft());
+    setActivePromptKind('plan');
     setPlanCopyState('idle');
     setDiffCopyState('idle');
+    setVerificationCopyState('idle');
   };
 
   const renderCopyLabel = (base: string, state: CopyState) => {
@@ -302,6 +356,12 @@ export default function CoworkPanel() {
     }
     return base;
   };
+  const activeCopyState =
+    activePromptKind === 'plan'
+      ? planCopyState
+      : activePromptKind === 'diff'
+        ? diffCopyState
+        : verificationCopyState;
 
   return (
     <section className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto px-4 py-4 text-sm">
@@ -342,6 +402,17 @@ export default function CoworkPanel() {
             )}
             {renderCopyLabel(localize('com_ui_cowork_prepare_diff_request'), diffCopyState)}
           </ActionButton>
+          <ActionButton onClick={() => void copyText(verificationPrompt, 'verification')}>
+            {verificationCopyState === 'copied' ? (
+              <Check className="h-3.5 w-3.5" aria-hidden="true" />
+            ) : (
+              <ClipboardList className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            {renderCopyLabel(
+              localize('com_ui_cowork_copy_verification_prompt'),
+              verificationCopyState,
+            )}
+          </ActionButton>
         </div>
 
         {!hasSuggestedFiles ? (
@@ -351,6 +422,68 @@ export default function CoworkPanel() {
           </div>
         ) : null}
       </div>
+
+      <FieldShell
+        title={localize('com_ui_cowork_prompt_handoff')}
+        description={localize('com_ui_cowork_prompt_handoff_help')}
+        icon={MessageSquareText}
+      >
+        <div className="space-y-2">
+          <div
+            className="grid grid-cols-3 gap-1 rounded-md bg-surface-secondary p-1"
+            role="tablist"
+            aria-label={localize('com_ui_cowork_prompt_handoff')}
+          >
+            {promptKinds.map((kind) => {
+              const isActive = activePromptKind === kind;
+              const isDisabled = kind === 'diff' && !hasSuggestedFiles;
+              return (
+                <button
+                  key={kind}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  disabled={isDisabled}
+                  onClick={() => setActivePromptKind(kind)}
+                  className={cn(
+                    'h-8 rounded px-2 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+                    isActive
+                      ? 'bg-surface-active-alt text-text-primary shadow-sm'
+                      : 'text-text-secondary hover:text-text-primary',
+                  )}
+                >
+                  {localize(promptLabelKeys[kind])}
+                </button>
+              );
+            })}
+          </div>
+          <textarea
+            readOnly
+            rows={8}
+            value={prompts[activePromptKind]}
+            aria-label={localize('com_ui_cowork_prompt_preview')}
+            className="w-full resize-none rounded-md border border-border-light bg-surface-secondary px-3 py-2 font-mono text-xs leading-5 text-text-primary outline-none"
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs leading-5 text-text-secondary">
+              {activePromptKind === 'diff'
+                ? localize('com_ui_cowork_prompt_diff_help')
+                : localize('com_ui_cowork_prompt_manual_help')}
+            </p>
+            <ActionButton
+              onClick={() => void copyText(prompts[activePromptKind], activePromptKind)}
+              disabled={activePromptKind === 'diff' && !hasSuggestedFiles}
+            >
+              {activeCopyState === 'copied' ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              {renderCopyLabel(localize('com_ui_cowork_copy_active_prompt'), activeCopyState)}
+            </ActionButton>
+          </div>
+        </div>
+      </FieldShell>
 
       <FieldShell
         title={localize('com_ui_cowork_goal')}
