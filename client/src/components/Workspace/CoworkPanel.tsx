@@ -111,6 +111,24 @@ const splitLines = (value: string) =>
 const formatList = (items: string[]) =>
   items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- TBD';
 
+const copyTextFallback = (text: string) => {
+  const textArea = document.createElement('textarea');
+  textArea.value = text;
+  textArea.setAttribute('readonly', '');
+  textArea.style.position = 'fixed';
+  textArea.style.left = '-9999px';
+  textArea.style.top = '0';
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    return document.execCommand('copy');
+  } finally {
+    document.body.removeChild(textArea);
+  }
+};
+
 const createPlanPrompt = (draft: CoworkDraft) =>
   [
     'Help turn this request into a small, reviewable implementation plan.',
@@ -335,7 +353,7 @@ export default function CoworkPanel() {
       await navigator.clipboard.writeText(text);
       setState('copied');
     } catch {
-      setState('failed');
+      setState(copyTextFallback(text) ? 'copied' : 'failed');
     }
   };
 
