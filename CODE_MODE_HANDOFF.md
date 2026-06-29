@@ -494,6 +494,7 @@ Implementation:
 - Keep `Details` and `Prompt Handoff` collapsed by default.
 - Keep primary view focused on Goal, Next Action, Plan, and readiness.
 - Current implementation keeps this phase manual-only: templates fill safe planning fields, real file paths still come from the user, `Prepare for Code` only copies a handoff prompt, and `Open Code` only switches to Code mode.
+- Manual workflow smoke test completed: Cowork can plan a docs update, hand it to Code, and Code can review/apply the resulting diff with checkpoint and verification.
 
 Acceptance:
 
