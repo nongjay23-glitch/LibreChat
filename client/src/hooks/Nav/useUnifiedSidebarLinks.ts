@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useRecoilValue } from 'recoil';
-import { Code2, MessagesSquare, UsersRound } from 'lucide-react';
+import { BookOpenText, Code2, MessagesSquare, UsersRound } from 'lucide-react';
 import { useUserKeyQuery } from 'librechat-data-provider/react-query';
 import { getConfigDefaults, getEndpointField } from 'librechat-data-provider';
 import type { TEndpointsConfig } from 'librechat-data-provider';
@@ -9,6 +9,7 @@ import ConversationsSection from '~/components/UnifiedSidebar/ConversationsSecti
 import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
 import useSideNavLinks from '~/hooks/Nav/useSideNavLinks';
 import CodePanel from '~/components/Workspace/CodePanel';
+import SourcesPanel from '~/components/Workspace/SourcesPanel';
 import store from '~/store';
 import CoworkPanel from '~/components/Workspace/CoworkPanel';
 
@@ -73,8 +74,15 @@ export default function useUnifiedSidebarLinks() {
       id: 'code-workspace',
       Component: CodePanel,
     };
+    const sourcesLink: NavLink = {
+      title: 'com_ui_sources',
+      label: '',
+      icon: BookOpenText,
+      id: 'sources',
+      Component: SourcesPanel,
+    };
 
-    return [conversationLink, coworkLink, codeLink, ...sideNavLinks];
+    return [conversationLink, coworkLink, codeLink, sourcesLink, ...sideNavLinks];
   }, [sideNavLinks]);
 
   return links;

@@ -37,7 +37,9 @@ Sensitive provider/API config lives in local config and must not be printed or c
 - `client/src/components/Workspace/CoworkPanel.tsx`
   - Cowork planning workspace with Goal, Scope, Plan, Files, Risks, Verification, Next Action, prompt handoff, file-context guidance, and local draft persistence.
 - `client/src/components/Workspace/WorkspaceModeTabs.tsx`
-  - Chat/Cowork/Code mode tabs.
+  - Chat/Cowork/Code/Sources mode tabs.
+- `client/src/components/Workspace/SourcesPanel.tsx`
+  - Sources mode UI: add text/.txt/.md source, source list, enable/disable, remove, status, and read-only preview.
 - `client/src/components/Messages/Content/CodeBar.tsx`
 - `client/src/components/Messages/Content/FloatingCodeBar.tsx`
   - Diff block handoff into Code mode.
@@ -197,15 +199,19 @@ Remaining optional polish:
 
 Current chat scope:
 
-- Keep working on Manual Cowork only.
-- Allowed work here: manual Cowork UI polish, prompt handoff polish, Details/Plan/Ready checklist improvements, browser smoke tests, and verified commits.
-- Do not start Cowork Auto work in this chat.
+- Update this handoff so it reflects the current state.
+- Continue the NotebookLM-style Sources core with Phase 2.
+- Add frontend-only/manual source creation from pasted text, `.txt`, and `.md`.
+- Add source list, source status, enable/disable, remove, and read-only preview.
+- Do not start Cowork Auto, Code Auto, Studio outputs, crawler/OCR, Google Drive sync, or a heavy vector database/RAG pipeline.
 
 Do not start this yet unless requested:
 
-- Continue with `Cowork` mode.
-- Cowork should build on the Code safety model instead of bypassing it.
-- Cowork should guide planning, task breakdown, project context, and human confirmation before any file writes.
+- Auto Cowork or Auto Code.
+- Studio outputs such as Audio overview, Slides, Video, Mind map, Report, Flashcards, Quiz, Infographic, or Table.
+- Broad autonomous agent behavior.
+
+Manual Cowork is complete for the current scope. Code mode remains the only path for project-file context, patch review, apply, checkpoints, restore, and verification.
 
 ## Cowork Mode Plan
 
@@ -841,7 +847,7 @@ After the first pass:
 - Add task status history.
 - Add a handoff summary generator for new chats.
 - Add a better file suggestion flow using the workspace tree.
-- Add optional project memory or NotebookLM-style source mode after Cowork and Code are stable.
+- Integrate with Sources only after the Sources core is stable.
 
 ## NotebookLM / Sources Plan
 
@@ -1047,6 +1053,15 @@ Recommended first coding slice:
    - suggested questions
    - gaps
 9. Keep Studio outputs hidden/deferred.
+
+Current implementation:
+
+- Phase 1 added the `Sources` tab and skeleton layout.
+- Phase 2 adds frontend-only sources from pasted text, `.txt`, and `.md`.
+- Source state is local to `SourcesPanel`; there is no backend route or persistence yet.
+- Sources show title, type, size, status, enabled state, added date, and read-only preview.
+- Secret-like, risky, unsupported, too-large, and parse-error sources are surfaced with explicit statuses.
+- Current size limit is 100 KB per source for the frontend-only MVP.
 
 ### Acceptance Criteria
 

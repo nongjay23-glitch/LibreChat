@@ -1,4 +1,4 @@
-import { Code2, MessagesSquare, UsersRound } from 'lucide-react';
+import { BookOpenText, Code2, MessagesSquare, UsersRound } from 'lucide-react';
 import { useActivePanel, resolveActivePanel } from '~/Providers';
 import type { NavLink } from '~/common';
 import { cn } from '~/utils';
@@ -7,6 +7,7 @@ const modes = [
   { id: 'conversations', label: 'Chat', icon: MessagesSquare },
   { id: 'cowork', label: 'Cowork', icon: UsersRound },
   { id: 'code-workspace', label: 'Code', icon: Code2 },
+  { id: 'sources', label: 'Sources', icon: BookOpenText },
 ];
 
 export default function WorkspaceModeTabs({ links }: { links: NavLink[] }) {
@@ -16,7 +17,7 @@ export default function WorkspaceModeTabs({ links }: { links: NavLink[] }) {
   return (
     <div className="border-b border-border-light px-3 py-3">
       <div
-        className="grid grid-cols-3 gap-1 rounded-lg bg-surface-secondary p-1"
+        className="grid grid-cols-4 gap-1 rounded-lg bg-surface-secondary p-1"
         role="tablist"
         aria-label="โหมดพื้นที่ทำงาน"
       >
