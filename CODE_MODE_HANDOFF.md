@@ -39,7 +39,7 @@ Sensitive provider/API config lives in local config and must not be printed or c
 - `client/src/components/Workspace/WorkspaceModeTabs.tsx`
   - Chat/Cowork/Code/Sources mode tabs.
 - `client/src/components/Workspace/SourcesPanel.tsx`
-  - Sources mode UI: add text/.txt/.md source, source list, enable/disable, remove, status, and read-only preview.
+  - Sources mode UI: NotebookLM-style workspace with references list first, compact add source, enable/disable, remove, status, secondary selected-source preview, central Source AI Chat placeholder, and notes cards.
 - `client/src/components/Messages/Content/CodeBar.tsx`
 - `client/src/components/Messages/Content/FloatingCodeBar.tsx`
   - Diff block handoff into Code mode.
@@ -200,9 +200,12 @@ Remaining optional polish:
 Current chat scope:
 
 - Update this handoff so it reflects the current state.
-- Continue the NotebookLM-style Sources core with Phase 2.
-- Add frontend-only/manual source creation from pasted text, `.txt`, and `.md`.
-- Add source list, source status, enable/disable, remove, and read-only preview.
+- Continue the NotebookLM-style Sources core with Phase 2.5.
+- Make Sources a full workspace view instead of a small side panel beside Chat.
+- Phase 2.5C corrects the layout toward NotebookLM: center is Source AI Chat first, left is Sources/References first, right is Notes list/cards, and preview is secondary.
+- Keep frontend-only/manual source creation from pasted text, `.txt`, and `.md`.
+- Keep source list, source status, enable/disable, remove, and read-only preview.
+- Scope in-memory Sources and manual Notes state by current chat/conversation id using existing conversation state.
 - Do not start Cowork Auto, Code Auto, Studio outputs, crawler/OCR, Google Drive sync, or a heavy vector database/RAG pipeline.
 
 Do not start this yet unless requested:
@@ -1058,10 +1061,13 @@ Current implementation:
 
 - Phase 1 added the `Sources` tab and skeleton layout.
 - Phase 2 adds frontend-only sources from pasted text, `.txt`, and `.md`.
-- Source state is local to `SourcesPanel`; there is no backend route or persistence yet.
+- Phase 2.5 changes Sources into a full NotebookLM-style workspace on desktop: left source list/add source, center librarian/chat placeholder plus preview, right manual notes placeholder.
+- Phase 2.5 keys in-memory Sources and Notes state by the current chat/conversation id. There is still no backend route or persistence yet.
+- Phase 2.5C corrects the information hierarchy: the center column is Source AI Chat with a disabled bottom input, the left column is References with compact add-source disclosure, the right column is Notes cards/list with Add note, and selected-source preview is secondary in the left column.
 - Sources show title, type, size, status, enabled state, added date, and read-only preview.
 - Secret-like, risky, unsupported, too-large, and parse-error sources are surfaced with explicit statuses.
 - Current size limit is 100 KB per source for the frontend-only MVP.
+- Source AI chat, note-to-source, citations, chunking, RAG, Studio outputs, and Attach to Chat are still deferred.
 
 ### Acceptance Criteria
 
@@ -1071,8 +1077,8 @@ Sources MVP is acceptable when:
 - The user can see sources in a list.
 - The user can preview a source.
 - The user can enable/disable sources.
-- The user can attach selected sources to Chat without dumping huge visible context into the message.
-- The prompt instructs the model to cite source labels and avoid guessing outside sources.
+- Sources uses a full workspace layout with source list/add source, librarian placeholder, and notes placeholder.
+- In-memory source and note state is scoped by current chat/conversation id.
 - The UI does not include Studio tiles yet.
 - The app builds and `/readyz` returns `OK`.
 

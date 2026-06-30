@@ -8,17 +8,18 @@ import {
   MessageSquareText,
   NotebookPen,
   PanelRightOpen,
-  ShieldCheck,
   ToggleLeft,
   ToggleRight,
   Trash2,
 } from 'lucide-react';
+import { useRecoilValue } from 'recoil';
+import { Constants } from 'librechat-data-provider';
 import type { ChangeEvent } from 'react';
 import type { TranslationKeys } from '~/hooks';
 import { useLocalize } from '~/hooks';
+import store from '~/store';
 import { cn } from '~/utils';
 
-type SourcesSection = 'ask' | 'guide' | 'notes';
 type SourceType = 'text' | 'markdown';
 type SourceStatus = 'ready' | 'disabled' | 'too_large' | 'blocked' | 'unsupported' | 'parse_error';
 
@@ -33,6 +34,12 @@ type NotebookSource = {
   addedAt: string;
 };
 
+type NotebookNote = {
+  id: string;
+  content: string;
+  addedAt: string;
+};
+
 type SourceInput = {
   title: string;
   type: SourceType;
@@ -42,24 +49,6 @@ type SourceInput = {
 };
 
 const maxSourceBytes = 100 * 1024;
-
-const sections: Array<{
-  id: SourcesSection;
-  labelKey: TranslationKeys;
-}> = [
-  { id: 'ask', labelKey: 'com_ui_sources_ask' },
-  { id: 'guide', labelKey: 'com_ui_sources_guide' },
-  { id: 'notes', labelKey: 'com_ui_sources_notes' },
-];
-
-const deferredItems: TranslationKeys[] = [
-  'com_ui_sources_deferred_studio',
-  'com_ui_sources_deferred_auto',
-  'com_ui_sources_deferred_crawler',
-  'com_ui_sources_deferred_ocr',
-  'com_ui_sources_deferred_drive',
-  'com_ui_sources_deferred_vector',
-];
 
 const statusLabelKeys: Record<SourceStatus, TranslationKeys> = {
   ready: 'com_ui_sources_status_ready',
@@ -182,26 +171,76 @@ export default function SourcesPanel() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pasteTitleRef = useRef<HTMLInputElement>(null);
   const pasteContentRef = useRef<HTMLTextAreaElement>(null);
-  const [sources, setSources] = useState<NotebookSource[]>([]);
-  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<SourcesSection>('ask');
+  const conversationId = useRecoilValue(store.conversationIdByIndex(0)) ?? Constants.NEW_CONVO;
+  const [sourcesByConversationId, setSourcesByConversationId] = useState<
+    Record<string, NotebookSource[]>
+  >({});
+  const [selectedSourceIdByConversationId, setSelectedSourceIdByConversationId] = useState<
+    Record<string, string | null>
+  >({});
+  const [notesByConversationId, setNotesByConversationId] = useState<Record<string, NotebookNote[]>>(
+    {},
+  );
+  const [noteDraftByConversationId, setNoteDraftByConversationId] = useState<Record<string, string>>(
+    {},
+  );
+  const [isAddSourceOpen, setIsAddSourceOpen] = useState(false);
   const [formError, setFormError] = useState('');
+
+  const sources = sourcesByConversationId[conversationId] ?? [];
+  const selectedSourceId = selectedSourceIdByConversationId[conversationId] ?? null;
+  const notes = notesByConversationId[conversationId] ?? [];
+  const noteDraft = noteDraftByConversationId[conversationId] ?? '';
 
   const selectedSource = useMemo(
     () => sources.find((source) => source.id === selectedSourceId) ?? null,
     [selectedSourceId, sources],
   );
 
-  const activeSectionLabel = useMemo(
-    () =>
-      sections.find((section) => section.id === activeSection)?.labelKey ?? sections[0].labelKey,
-    [activeSection],
-  );
-
   const enabledCount = useMemo(
     () => sources.filter((source) => getSourceStatus(source) === 'ready').length,
     [sources],
   );
+
+  const setCurrentSources = (updater: (currentSources: NotebookSource[]) => NotebookSource[]) => {
+    setSourcesByConversationId((currentByConversationId) => ({
+      ...currentByConversationId,
+      [conversationId]: updater(currentByConversationId[conversationId] ?? []),
+    }));
+  };
+
+  const setCurrentSelectedSourceId = (sourceId: string | null) => {
+    setSelectedSourceIdByConversationId((currentByConversationId) => ({
+      ...currentByConversationId,
+      [conversationId]: sourceId,
+    }));
+  };
+
+  const setCurrentNoteDraft = (value: string) => {
+    setNoteDraftByConversationId((currentByConversationId) => ({
+      ...currentByConversationId,
+      [conversationId]: value,
+    }));
+  };
+
+  const addNote = () => {
+    const content = noteDraft.trim();
+    if (!content) {
+      return;
+    }
+
+    const note: NotebookNote = {
+      id: createSourceId(),
+      content,
+      addedAt: new Date().toISOString(),
+    };
+
+    setNotesByConversationId((currentByConversationId) => ({
+      ...currentByConversationId,
+      [conversationId]: [note, ...(currentByConversationId[conversationId] ?? [])],
+    }));
+    setCurrentNoteDraft('');
+  };
 
   const addSource = (input: SourceInput) => {
     const source: NotebookSource = {
@@ -211,8 +250,8 @@ export default function SourcesPanel() {
       ...input,
     };
 
-    setSources((currentSources) => [source, ...currentSources]);
-    setSelectedSourceId(source.id);
+    setCurrentSources((currentSources) => [source, ...currentSources]);
+    setCurrentSelectedSourceId(source.id);
   };
 
   const handleAddPastedSource = () => {
@@ -239,6 +278,7 @@ export default function SourcesPanel() {
       pasteContentRef.current.value = '';
     }
     setFormError('');
+    setIsAddSourceOpen(false);
   };
 
   const handleFilesSelected = (event: ChangeEvent<HTMLInputElement>) => {
@@ -307,7 +347,7 @@ export default function SourcesPanel() {
   };
 
   const toggleSource = (sourceId: string) => {
-    setSources((currentSources) =>
+    setCurrentSources((currentSources) =>
       currentSources.map((source) => {
         if (source.id !== sourceId || source.baseStatus !== 'ready') {
           return source;
@@ -318,10 +358,10 @@ export default function SourcesPanel() {
   };
 
   const removeSource = (sourceId: string) => {
-    setSources((currentSources) => {
+    setCurrentSources((currentSources) => {
       const nextSources = currentSources.filter((source) => source.id !== sourceId);
       if (selectedSourceId === sourceId) {
-        setSelectedSourceId(nextSources[0]?.id ?? null);
+        setCurrentSelectedSourceId(nextSources[0]?.id ?? null);
       }
       return nextSources;
     });
@@ -340,312 +380,335 @@ export default function SourcesPanel() {
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface-primary text-text-primary">
-      <div className="border-b border-border-light px-4 py-3">
-        <div className="flex items-start justify-between gap-3">
+      <div className="border-b border-border-light px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <BookOpenText className="h-4 w-4 text-text-secondary" aria-hidden="true" />
-              <h2 className="truncate text-sm font-semibold">{localize('com_ui_sources')}</h2>
+              <BookOpenText className="h-5 w-5 text-text-secondary" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="truncate text-xs text-text-secondary">
+                  {localize('com_ui_sources_default_notebook')}
+                </p>
+                <h2 className="truncate text-lg font-semibold">{localize('com_ui_sources')}</h2>
+              </div>
             </div>
-            <p className="mt-1 text-xs text-text-secondary">{localize('com_ui_sources_intro')}</p>
           </div>
-          <span className="shrink-0 rounded-md border border-border-light px-2 py-1 text-xs text-text-secondary">
-            {localize('com_ui_sources_default_notebook')}
-          </span>
+          <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+            <span className="rounded-md border border-border-light px-2 py-1">
+              {localize('com_ui_sources_chat_source_count', { count: enabledCount })}
+            </span>
+            <span className="rounded-md border border-border-light px-2 py-1">
+              {notes.length} {localize('com_ui_sources_notes')}
+            </span>
+          </div>
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <aside className="flex min-h-[220px] flex-col border-b border-border-light">
-          <div className="flex items-center justify-between gap-2 border-b border-border-light px-3 py-2">
-            <div className="flex min-w-0 items-center gap-2">
-              <FileText className="h-4 w-4 text-text-secondary" aria-hidden="true" />
-              <h3 className="truncate text-xs font-semibold uppercase text-text-secondary">
-                {localize('com_ui_sources_list')}
-              </h3>
-              <span className="rounded-md bg-surface-secondary px-1.5 py-0.5 text-[11px] text-text-secondary">
-                {enabledCount}/{sources.length}
-              </span>
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[320px_minmax(0,1fr)_320px] lg:overflow-hidden xl:grid-cols-[360px_minmax(0,1fr)_360px]">
+        <aside className="flex min-h-[420px] flex-col border-b border-border-light lg:min-h-0 lg:border-b-0 lg:border-r">
+          <div className="border-b border-border-light p-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <FileText className="h-4 w-4 text-text-secondary" aria-hidden="true" />
+                <h3 className="truncate text-xs font-semibold uppercase text-text-secondary">
+                  {localize('com_ui_sources_references')}
+                </h3>
+                <span className="rounded-md bg-surface-secondary px-1.5 py-0.5 text-[11px] text-text-secondary">
+                  {enabledCount}/{sources.length}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
+                onClick={() => setIsAddSourceOpen((open) => !open)}
+              >
+                <FilePlus2 className="h-3.5 w-3.5" aria-hidden="true" />
+                {localize('com_ui_sources_add_source')}
+              </button>
             </div>
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border-light text-text-secondary hover:text-text-primary"
-              aria-label={localize('com_ui_sources_add_file')}
-              title={localize('com_ui_sources_add_file')}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <FilePlus2 className="h-4 w-4" aria-hidden="true" />
-            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".txt,.md,text/plain,text/markdown"
+              className="hidden"
+              data-testid="sources-file-input"
+              onChange={handleFilesSelected}
+            />
+
+            {isAddSourceOpen ? (
+              <section className="mt-3 rounded-lg border border-border-light bg-surface-primary-alt p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-sm font-semibold">{localize('com_ui_sources_add_text')}</h4>
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-text-secondary hover:text-text-primary"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {localize('com_ui_sources_add_file')}
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-2">
+                  <input
+                    ref={pasteTitleRef}
+                    className="w-full rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
+                    placeholder={localize('com_ui_sources_title_placeholder')}
+                    aria-label={localize('com_ui_sources_title')}
+                  />
+                  <textarea
+                    ref={pasteContentRef}
+                    className="min-h-[92px] w-full resize-y rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
+                    placeholder={localize('com_ui_sources_content_placeholder')}
+                    aria-label={localize('com_ui_sources_content')}
+                  />
+                </div>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs text-text-secondary">
+                    {localize('com_ui_sources_size_limit')} {formatBytes(maxSourceBytes)}
+                  </p>
+                  <button
+                    type="button"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-light px-3 text-xs font-semibold hover:bg-surface-hover"
+                    onClick={handleAddPastedSource}
+                  >
+                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    {localize('com_ui_sources_add_source')}
+                  </button>
+                </div>
+                {formError ? (
+                  <p className="mt-2 text-xs font-medium text-red-600">{formError}</p>
+                ) : null}
+              </section>
+            ) : null}
           </div>
 
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            accept=".txt,.md,text/plain,text/markdown"
-            className="hidden"
-            data-testid="sources-file-input"
-            onChange={handleFilesSelected}
-          />
+          <div className="flex min-h-0 flex-1 flex-col">
+            {sources.length === 0 ? (
+              <div className="flex flex-1 flex-col justify-center px-4 py-6 text-center">
+                <FileText className="mx-auto h-8 w-8 text-text-secondary" aria-hidden="true" />
+                <p className="mt-3 text-sm font-medium">{localize('com_ui_sources_empty_title')}</p>
+                <p className="mt-2 text-xs text-text-secondary">
+                  {localize('com_ui_sources_empty_help')}
+                </p>
+              </div>
+            ) : (
+              <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-3">
+                {sources.map((source) => {
+                  const status = getSourceStatus(source);
+                  const selected = selectedSourceId === source.id;
+                  return (
+                    <div
+                      key={source.id}
+                      role="button"
+                      tabIndex={0}
+                      className={cn(
+                        'w-full rounded-lg border p-3 text-left transition-colors',
+                        selected
+                          ? 'border-blue-500/50 bg-blue-500/10'
+                          : 'border-border-light bg-surface-primary-alt hover:bg-surface-hover',
+                      )}
+                      data-testid="sources-list-item"
+                      onClick={() => setCurrentSelectedSourceId(source.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          setCurrentSelectedSourceId(source.id);
+                        }
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold">{source.title}</p>
+                          <p className="mt-1 text-xs text-text-secondary">
+                            {localize(sourceTypeLabelKeys[source.type])} -{' '}
+                            {formatBytes(source.sizeBytes)}
+                          </p>
+                        </div>
+                        {renderStatusBadge(status)}
+                      </div>
+                      <div className="mt-3 flex items-center justify-between gap-2">
+                        <span className="truncate text-xs text-text-secondary">
+                          {formatDate(source.addedAt)}
+                        </span>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-secondary"
+                            title={
+                              source.baseStatus === 'ready'
+                                ? localize('com_ui_sources_toggle')
+                                : localize('com_ui_sources_toggle_unavailable')
+                            }
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleSource(source.id);
+                            }}
+                          >
+                            {source.enabled ? (
+                              <ToggleRight className="h-4 w-4 text-green-600" aria-hidden="true" />
+                            ) : (
+                              <ToggleLeft className="h-4 w-4" aria-hidden="true" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-secondary hover:text-red-500"
+                            title={localize('com_ui_sources_remove')}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              removeSource(source.id);
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
 
-          {sources.length === 0 ? (
-            <div className="flex flex-1 flex-col justify-center px-4 py-6 text-center">
-              <FileText className="mx-auto h-8 w-8 text-text-secondary" aria-hidden="true" />
-              <p className="mt-3 text-sm font-medium">{localize('com_ui_sources_empty_title')}</p>
-              <p className="mt-2 text-xs text-text-secondary">
-                {localize('com_ui_sources_empty_help')}
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-1 flex-col gap-2 overflow-y-auto p-3">
-              {sources.map((source) => {
-                const status = getSourceStatus(source);
-                const selected = selectedSourceId === source.id;
-                return (
-                  <div
-                    key={source.id}
-                    role="button"
-                    tabIndex={0}
-                    className={cn(
-                      'w-full rounded-lg border p-3 text-left transition-colors',
-                      selected
-                        ? 'border-blue-500/50 bg-blue-500/10'
-                        : 'border-border-light bg-surface-primary-alt hover:bg-surface-hover',
-                    )}
-                    data-testid="sources-list-item"
-                    onClick={() => setSelectedSourceId(source.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        setSelectedSourceId(source.id);
-                      }
-                    }}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{source.title}</p>
-                        <p className="mt-1 text-xs text-text-secondary">
-                          {localize(sourceTypeLabelKeys[source.type])} -{' '}
-                          {formatBytes(source.sizeBytes)}
-                        </p>
-                      </div>
-                      {renderStatusBadge(status)}
+            <section className="border-t border-border-light p-3">
+              <div className="mb-2 flex items-center gap-2">
+                <PanelRightOpen className="h-4 w-4 text-text-secondary" aria-hidden="true" />
+                <h3 className="truncate text-xs font-semibold uppercase text-text-secondary">
+                  {localize('com_ui_sources_selected_detail')}
+                </h3>
+              </div>
+              {selectedSource ? (
+                <div className="max-h-48 overflow-y-auto rounded-lg border border-border-light bg-surface-primary-alt p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">{selectedSource.title}</p>
+                      <p className="mt-1 text-xs text-text-secondary">
+                        {localize(sourceTypeLabelKeys[selectedSource.type])} -{' '}
+                        {formatBytes(selectedSource.sizeBytes)}
+                      </p>
                     </div>
-                    <div className="mt-3 flex items-center justify-between gap-2">
-                      <span className="truncate text-xs text-text-secondary">
-                        {formatDate(source.addedAt)}
-                      </span>
-                      <div className="flex shrink-0 items-center gap-1">
-                        <button
-                          type="button"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-secondary"
-                          title={
-                            source.baseStatus === 'ready'
-                              ? localize('com_ui_sources_toggle')
-                              : localize('com_ui_sources_toggle_unavailable')
-                          }
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleSource(source.id);
-                          }}
-                        >
-                          {source.enabled ? (
-                            <ToggleRight className="h-4 w-4 text-green-600" aria-hidden="true" />
-                          ) : (
-                            <ToggleLeft className="h-4 w-4" aria-hidden="true" />
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-text-secondary hover:text-red-500"
-                          title={localize('com_ui_sources_remove')}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            removeSource(source.id);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" aria-hidden="true" />
-                        </button>
-                      </div>
-                    </div>
+                    {renderStatusBadge(getSourceStatus(selectedSource))}
                   </div>
-                );
-              })}
-            </div>
-          )}
+                  {selectedSource.content ? (
+                    <pre className="mt-3 max-h-28 whitespace-pre-wrap break-words text-xs leading-5 text-text-primary">
+                      {selectedSource.content}
+                    </pre>
+                  ) : (
+                    <div className="mt-3 flex items-start gap-2 text-xs text-text-secondary">
+                      <AlertTriangle className="mt-0.5 h-4 w-4" aria-hidden="true" />
+                      <p>{localize('com_ui_sources_preview_unavailable')}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="rounded-lg border border-border-light bg-surface-primary-alt p-3 text-xs text-text-secondary">
+                  {localize('com_ui_sources_preview_empty_help')}
+                </p>
+              )}
+            </section>
+          </div>
         </aside>
 
-        <main className="flex flex-col border-b border-border-light">
-          <div className="border-b border-border-light px-3 py-2">
-            <div className="grid grid-cols-3 gap-1 rounded-lg bg-surface-secondary p-1" role="tablist">
-              {sections.map((section) => {
-                const isActive = activeSection === section.id;
-                return (
-                  <button
-                    key={section.id}
-                    type="button"
-                    role="tab"
-                    aria-selected={isActive}
-                    onClick={() => setActiveSection(section.id)}
-                    className={cn(
-                      'h-8 rounded-md px-2 text-xs font-semibold transition-colors',
-                      isActive
-                        ? 'bg-surface-active-alt text-text-primary shadow-sm'
-                        : 'text-text-secondary hover:text-text-primary',
-                    )}
-                  >
-                    {localize(section.labelKey)}
-                  </button>
-                );
-              })}
+        <main className="flex min-h-[520px] flex-col border-b border-border-light lg:min-h-0 lg:border-b-0 lg:border-r">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border-light px-5 py-4">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <MessageSquareText className="h-4 w-4 text-text-secondary" aria-hidden="true" />
+                <h3 className="truncate text-sm font-semibold">
+                  {localize('com_ui_sources_librarian')}
+                </h3>
+              </div>
+              <p className="mt-1 text-xs text-text-secondary">
+                {localize('com_ui_sources_chat_source_count', { count: enabledCount })}
+              </p>
             </div>
           </div>
 
-          <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-4 py-4">
-            <section
-              className="rounded-lg border border-border-light bg-surface-primary-alt p-4"
-            >
-              <div className="flex items-start gap-3">
-                <FilePlus2 className="mt-0.5 h-5 w-5 text-text-secondary" aria-hidden="true" />
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-sm font-semibold">{localize('com_ui_sources_add_text')}</h3>
-                  <p className="mt-1 text-xs text-text-secondary">
-                    {localize('com_ui_sources_add_text_help')}
-                  </p>
-                  <div className="mt-3 grid gap-2">
-                    <input
-                      ref={pasteTitleRef}
-                      className="w-full rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
-                      placeholder={localize('com_ui_sources_title_placeholder')}
-                      aria-label={localize('com_ui_sources_title')}
-                    />
-                    <textarea
-                      ref={pasteContentRef}
-                      className="min-h-[130px] w-full resize-y rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
-                      placeholder={localize('com_ui_sources_content_placeholder')}
-                      aria-label={localize('com_ui_sources_content')}
-                    />
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-xs text-text-secondary">
-                      {localize('com_ui_sources_size_limit')} {formatBytes(maxSourceBytes)}
-                    </p>
-                    <button
-                      type="button"
-                      className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
-                      onClick={handleAddPastedSource}
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      {localize('com_ui_sources_add_source')}
-                    </button>
-                  </div>
-                  {formError ? (
-                    <p className="mt-2 text-xs font-medium text-red-600">{formError}</p>
-                  ) : null}
-                </div>
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="flex flex-1 flex-col items-center justify-center px-6 py-8 text-center">
+              <div className="flex h-12 w-12 items-center justify-center rounded-full border border-border-light bg-surface-primary-alt">
+                <MessageSquareText className="h-6 w-6 text-text-secondary" aria-hidden="true" />
               </div>
-            </section>
+              <h3 className="mt-4 text-base font-semibold">
+                {localize('com_ui_sources_chat_empty_title')}
+              </h3>
+              <p className="mt-2 max-w-md text-sm text-text-secondary">
+                {localize('com_ui_sources_librarian_help')}
+              </p>
+            </div>
 
-            <section className="rounded-lg border border-border-light bg-surface-primary-alt p-4">
-              <div className="flex items-start gap-3">
-                <MessageSquareText
-                  className="mt-0.5 h-5 w-5 text-text-secondary"
-                  aria-hidden="true"
+            <div className="border-t border-border-light p-4">
+              <div className="flex items-end gap-2 rounded-xl border border-border-light bg-surface-primary-alt p-2">
+                <textarea
+                  className="max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none"
+                  disabled
+                  placeholder={localize('com_ui_sources_chat_input_placeholder')}
+                  aria-label={localize('com_ui_sources_chat_input_placeholder')}
                 />
-                <div className="min-w-0">
-                  <h3 className="text-sm font-semibold">{localize(activeSectionLabel)}</h3>
-                  <p className="mt-1 text-xs text-text-secondary">
-                    {localize('com_ui_sources_ask_empty_help')}
-                  </p>
-                </div>
+                <button
+                  type="button"
+                  disabled
+                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border-light text-text-secondary opacity-70"
+                  title={localize('com_ui_sources_send_disabled')}
+                >
+                  <MessageSquareText className="h-4 w-4" aria-hidden="true" />
+                </button>
               </div>
-            </section>
-
-            <section className="rounded-lg border border-border-light bg-surface-primary-alt p-4">
-              <div className="flex items-start gap-3">
-                <ShieldCheck className="mt-0.5 h-5 w-5 text-text-secondary" aria-hidden="true" />
-                <div className="min-w-0">
-                  <h3 className="text-sm font-semibold">{localize('com_ui_sources_safety')}</h3>
-                  <p className="mt-1 text-xs text-text-secondary">
-                    {localize('com_ui_sources_safety_help')}
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {deferredItems.map((item) => (
-                      <span
-                        key={item}
-                        className="rounded-md border border-border-light px-2 py-1 text-xs text-text-secondary"
-                      >
-                        {localize(item)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </section>
+            </div>
           </div>
         </main>
 
-        <aside className="flex min-h-[260px] flex-col">
-          <div className="flex items-center gap-2 border-b border-border-light px-3 py-2">
-            <PanelRightOpen className="h-4 w-4 text-text-secondary" aria-hidden="true" />
-            <h3 className="truncate text-xs font-semibold uppercase text-text-secondary">
-              {localize('com_ui_sources_preview')}
-            </h3>
+        <aside className="flex min-h-[420px] flex-col">
+          <div className="flex items-center justify-between gap-2 border-b border-border-light px-3 py-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <NotebookPen className="h-4 w-4 text-text-secondary" aria-hidden="true" />
+              <h3 className="truncate text-xs font-semibold uppercase text-text-secondary">
+                {localize('com_ui_sources_notes')}
+              </h3>
+            </div>
+            <button
+              type="button"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-light px-3 text-xs font-semibold hover:bg-surface-hover"
+              onClick={addNote}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
+              {localize('com_ui_sources_add_note')}
+            </button>
           </div>
-          {selectedSource ? (
-            <div className="flex flex-1 flex-col overflow-y-auto p-4">
-              <div className="rounded-lg border border-border-light bg-surface-primary-alt p-3">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold">{selectedSource.title}</p>
-                    <p className="mt-1 text-xs text-text-secondary">
-                      {localize(sourceTypeLabelKeys[selectedSource.type])} -{' '}
-                      {formatBytes(selectedSource.sizeBytes)}
-                    </p>
-                  </div>
-                  {renderStatusBadge(getSourceStatus(selectedSource))}
-                </div>
-                <dl className="mt-3 grid gap-2 text-xs text-text-secondary">
-                  <div className="flex justify-between gap-3">
-                    <dt>{localize('com_ui_sources_added')}</dt>
-                    <dd className="text-right">{formatDate(selectedSource.addedAt)}</dd>
-                  </div>
-                  <div className="flex justify-between gap-3">
-                    <dt>{localize('com_ui_sources_enabled')}</dt>
-                    <dd>{selectedSource.enabled ? localize('com_ui_yes') : localize('com_ui_no')}</dd>
-                  </div>
-                </dl>
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+            <textarea
+              className="min-h-[84px] resize-y rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
+              value={noteDraft}
+              placeholder={localize('com_ui_sources_notes_placeholder')}
+              aria-label={localize('com_ui_sources_notes')}
+              onChange={(event) => setCurrentNoteDraft(event.target.value)}
+            />
+            {notes.length === 0 ? (
+              <div className="rounded-lg border border-border-light bg-surface-primary-alt p-4 text-sm text-text-secondary">
+                {localize('com_ui_sources_notes_empty')}
               </div>
-
-              {selectedSource.content ? (
-                <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-border-light bg-surface-primary-alt p-3 text-xs leading-5 text-text-primary">
-                  {selectedSource.content}
-                </pre>
-              ) : (
-                <div className="mt-3 rounded-lg border border-border-light bg-surface-primary-alt p-3">
-                  <div className="flex items-start gap-2">
-                    <AlertTriangle
-                      className="mt-0.5 h-4 w-4 text-text-secondary"
-                      aria-hidden="true"
-                    />
-                    <p className="text-xs text-text-secondary">
-                      {localize('com_ui_sources_preview_unavailable')}
-                    </p>
+            ) : (
+              notes.map((note) => (
+                <article
+                  key={note.id}
+                  className="rounded-lg border border-border-light bg-surface-primary-alt p-3"
+                >
+                  <p className="whitespace-pre-wrap break-words text-sm">{note.content}</p>
+                  <div className="mt-3 flex items-center justify-between gap-2">
+                    <span className="truncate text-xs text-text-secondary">
+                      {formatDate(note.addedAt)}
+                    </span>
+                    <button
+                      type="button"
+                      disabled
+                      className="rounded-md border border-border-light px-2 py-1 text-xs font-medium text-text-secondary opacity-70"
+                    >
+                      {localize('com_ui_sources_note_source_disabled')}
+                    </button>
                   </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="flex flex-1 flex-col justify-center px-4 py-6 text-center">
-              <NotebookPen className="mx-auto h-8 w-8 text-text-secondary" aria-hidden="true" />
-              <p className="mt-3 text-sm font-medium">
-                {localize('com_ui_sources_preview_empty_title')}
-              </p>
-              <p className="mt-2 text-xs text-text-secondary">
-                {localize('com_ui_sources_preview_empty_help')}
-              </p>
-            </div>
-          )}
+                </article>
+              ))
+            )}
+          </div>
         </aside>
       </div>
     </div>
