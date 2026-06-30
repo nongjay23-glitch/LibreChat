@@ -5,6 +5,20 @@ const http = require('http');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const express = require('express');
+const { randomUUID } = require('crypto');
+const { logger } = require('@librechat/data-schemas');
+const {
+  ContentTypes,
+  Constants,
+  EndpointURLs,
+  EModelEndpoint,
+} = require('librechat-data-provider');
+const {
+  configMiddleware,
+  buildEndpointOption,
+  moderateText,
+} = require('~/server/middleware');
+const { initializeClient } = require('~/server/services/Endpoints/agents');
 const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 
 const router = express.Router();
@@ -29,6 +43,7 @@ const PATCH_REBASE_MESSAGE =
 const NODE_SYNTAX_EXTENSIONS = new Set(['.cjs', '.js', '.mjs']);
 const TS_SYNTAX_EXTENSIONS = new Set(['.ts', '.tsx']);
 const VERIFICATION_PROFILES = new Set(['fast', 'normal', 'strict']);
+const MAX_SOURCE_CHAT_PROMPT_BYTES = 32 * 1024;
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -64,6 +79,92 @@ const BLOCKED_EXTENSIONS = new Set([
 ]);
 
 router.use(requireJwtAuth);
+
+const silentModelResponse = {
+  writableEnded: false,
+  headersSent: false,
+  setHeader: () => {},
+  flushHeaders: () => {},
+  flush: () => {},
+  write: () => true,
+  end: () => {},
+  status() {
+    return this;
+  },
+  json() {
+    return this;
+  },
+  send() {
+    return this;
+  },
+};
+
+function getContentPartText(part) {
+  if (!part || typeof part !== 'object') {
+    return '';
+  }
+
+  if (part.type === ContentTypes.ERROR) {
+    const errorValue = part[ContentTypes.ERROR];
+    return typeof errorValue === 'string' ? errorValue : JSON.stringify(errorValue ?? '');
+  }
+
+  if (part.type !== ContentTypes.TEXT) {
+    return '';
+  }
+
+  const textValue = part[ContentTypes.TEXT];
+  if (typeof textValue === 'string') {
+    return textValue;
+  }
+  if (typeof textValue?.value === 'string') {
+    return textValue.value;
+  }
+  if (typeof textValue?.text === 'string') {
+    return textValue.text;
+  }
+  return '';
+}
+
+function extractCompletionText(completion = []) {
+  if (!Array.isArray(completion)) {
+    return '';
+  }
+
+  return completion
+    .map(getContentPartText)
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function prepareSourceChatRequest(req, _res, next) {
+  req.body = req.body || {};
+  req.body.tools = [];
+  req.body.files = [];
+  req.body.manualSkills = [];
+  req.body.ephemeralAgent = {
+    ...(req.body.ephemeralAgent ?? {}),
+    skills: false,
+  };
+  next();
+}
+
+function useAgentEndpointOptionBuilder(req, _res, next) {
+  Object.defineProperty(req, 'baseUrl', {
+    configurable: true,
+    value: EndpointURLs[EModelEndpoint.agents],
+  });
+  next();
+}
+
+function getSafeSourceChatErrorMessage(error) {
+  const rawMessage = error?.message || 'Source chat request failed.';
+  return String(rawMessage)
+    .replace(/\b(sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
+    .replace(/\b(api[-_ ]?key|token|password|credential|secret)=\S+/gi, '$1=[redacted]')
+    .slice(0, 500);
+}
 
 function normalizeRelativePath(value = '') {
   const normalized = String(value).replace(/\\/g, '/').replace(/^\/+/, '');
@@ -967,6 +1068,82 @@ async function readActivities(limit = MAX_ACTIVITY_ITEMS) {
     })
     .filter(Boolean);
 }
+
+router.post(
+  '/source-chat',
+  configMiddleware,
+  moderateText,
+  prepareSourceChatRequest,
+  useAgentEndpointOptionBuilder,
+  buildEndpointOption,
+  async (req, res) => {
+    try {
+      const prompt = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      if (!prompt) {
+        return res.status(400).json({ message: 'Question is required.' });
+      }
+
+      if (Buffer.byteLength(prompt, 'utf8') > MAX_SOURCE_CHAT_PROMPT_BYTES) {
+        return res.status(400).json({ message: 'Source chat prompt is too large.' });
+      }
+
+      const conversationId =
+        typeof req.body?.conversationId === 'string' && req.body.conversationId.trim()
+          ? `source-chat-${req.body.conversationId.trim()}`
+          : `source-chat-${randomUUID()}`;
+      const userMessageId = randomUUID();
+      const responseMessageId = randomUUID();
+      const now = new Date().toISOString();
+      const endpointOption = req.body?.endpointOption;
+      const abortController = new AbortController();
+
+      const { client, userMCPAuthMap } = await initializeClient({
+        req,
+        res: silentModelResponse,
+        signal: abortController.signal,
+        endpointOption,
+      });
+
+      client.conversationId = conversationId;
+      client.parentMessageId = userMessageId;
+      client.responseMessageId = responseMessageId;
+      client.user = req.user.id;
+
+      const payload = [
+        {
+          messageId: userMessageId,
+          parentMessageId: Constants.NO_PARENT,
+          conversationId,
+          text: prompt,
+          sender: 'User',
+          isCreatedByUser: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+
+      const { completion } = await client.sendCompletion(payload, {
+        abortController,
+        userMCPAuthMap,
+      });
+      const text = extractCompletionText(completion);
+
+      if (!text) {
+        return res.status(502).json({ message: 'The model returned an empty response.' });
+      }
+
+      return res.json({ text, answer: text });
+    } catch (error) {
+      const status = error?.status || error?.response?.status || 500;
+      const message = getSafeSourceChatErrorMessage(error);
+      logger.error('[source-chat] request failed', {
+        status,
+        message,
+      });
+      return res.status(status >= 400 && status < 600 ? status : 500).json({ message });
+    }
+  },
+);
 
 router.get('/status', async (_req, res) => {
   try {

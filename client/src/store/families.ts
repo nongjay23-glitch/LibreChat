@@ -46,6 +46,59 @@ export type CoworkCodeHandoff = {
   summary: string;
 };
 
+export type WorkspaceSourceType = 'text' | 'markdown';
+export type WorkspaceSourceStatus =
+  | 'ready'
+  | 'too_large'
+  | 'blocked'
+  | 'unsupported'
+  | 'parse_error';
+
+export type WorkspaceSourceChunkKind = 'heading' | 'paragraph' | 'table' | 'text';
+
+export type WorkspaceSourceChunk = {
+  id: string;
+  sourceId: string;
+  index: number;
+  heading?: string;
+  content: string;
+  kind: WorkspaceSourceChunkKind;
+  startOffset: number;
+  endOffset: number;
+  sizeBytes: number;
+  tokenEstimate: number;
+};
+
+export type WorkspaceNotebookSource = {
+  id: string;
+  title: string;
+  type: WorkspaceSourceType;
+  content: string;
+  sizeBytes: number;
+  chunks?: WorkspaceSourceChunk[];
+  enabled: boolean;
+  baseStatus: WorkspaceSourceStatus;
+  addedAt: string;
+  origin?: 'note';
+};
+
+export type WorkspaceNotebookNote = {
+  id: string;
+  content: string;
+  addedAt: string;
+};
+
+export type WorkspaceSourceChatMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt: string;
+  sourceTitles?: string[];
+  contextSummary?: string;
+  warning?: string;
+  error?: boolean;
+};
+
 const submissionKeysAtom = atom<(string | number)[]>({
   key: 'submissionKeys',
   default: [],
@@ -346,6 +399,38 @@ const coworkCodeHandoffByIndex = atomFamily<CoworkCodeHandoff | null, string | n
   default: null,
 });
 
+const workspaceSourcesByConversationId = atomFamily<WorkspaceNotebookSource[], string>({
+  key: 'workspaceSourcesByConversationId',
+  default: [],
+});
+
+const workspaceSelectedSourceIdByConversationId = atomFamily<string | null, string>({
+  key: 'workspaceSelectedSourceIdByConversationId',
+  default: null,
+});
+
+const workspaceNotesByConversationId = atomFamily<WorkspaceNotebookNote[], string>({
+  key: 'workspaceNotesByConversationId',
+  default: [],
+});
+
+const workspaceNoteDraftByConversationId = atomFamily<string, string>({
+  key: 'workspaceNoteDraftByConversationId',
+  default: '',
+});
+
+const workspaceSourceChatMessagesByConversationId = atomFamily<WorkspaceSourceChatMessage[], string>(
+  {
+    key: 'workspaceSourceChatMessagesByConversationId',
+    default: [],
+  },
+);
+
+const workspaceSourceChatDraftByConversationId = atomFamily<string, string>({
+  key: 'workspaceSourceChatDraftByConversationId',
+  default: '',
+});
+
 const globalAudioURLFamily = atomFamily<string | null, string | number | null>({
   key: 'globalAudioURLByIndex',
   default: null,
@@ -515,5 +600,11 @@ export default {
   pendingCodeContextByConvoId,
   pendingWorkspacePatchByIndex,
   coworkCodeHandoffByIndex,
+  workspaceSourcesByConversationId,
+  workspaceSelectedSourceIdByConversationId,
+  workspaceNotesByConversationId,
+  workspaceNoteDraftByConversationId,
+  workspaceSourceChatMessagesByConversationId,
+  workspaceSourceChatDraftByConversationId,
   updateConversationSelector,
 };

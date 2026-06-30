@@ -1,6 +1,6 @@
 # Code Mode Handoff
 
-Last updated: 2026-06-30
+Last updated: 2026-07-01
 
 This file summarizes the custom Code mode work completed in this LibreChat-based workspace so a new chat can continue without re-reading the whole conversation.
 
@@ -37,9 +37,13 @@ Sensitive provider/API config lives in local config and must not be printed or c
 - `client/src/components/Workspace/CoworkPanel.tsx`
   - Cowork planning workspace with Goal, Scope, Plan, Files, Risks, Verification, Next Action, prompt handoff, file-context guidance, and local draft persistence.
 - `client/src/components/Workspace/WorkspaceModeTabs.tsx`
-  - Chat/Cowork/Code/Sources mode tabs.
+  - Chat/Cowork/Code mode tabs. Sources/Notebook is no longer a main workspace tab.
 - `client/src/components/Workspace/SourcesPanel.tsx`
-  - Sources mode UI: NotebookLM-style workspace with references list first, compact add source, enable/disable, remove, status, secondary selected-source preview, central Source AI Chat placeholder, and notes cards.
+  - Sources mode UI: NotebookLM-style workspace with references list first, compact add source, enable/disable, remove, status, secondary selected-source preview, central Source AI Chat MVP, notes cards, in-memory note delete, and in-memory note-to-source. Sources/Notes/Source AI Chat state is kept in frontend Recoil state so it survives workspace mode switching.
+- `client/src/components/Chat/Header.tsx`
+  - Chat header controls, including the per-chat Notebook entry button.
+- `client/src/components/Chat/ChatView.tsx`
+  - Chat surface and per-chat Notebook overlay host.
 - `client/src/components/Messages/Content/CodeBar.tsx`
 - `client/src/components/Messages/Content/FloatingCodeBar.tsx`
   - Diff block handoff into Code mode.
@@ -203,10 +207,20 @@ Current chat scope:
 - Continue the NotebookLM-style Sources core with Phase 2.5.
 - Make Sources a full workspace view instead of a small side panel beside Chat.
 - Phase 2.5C corrects the layout toward NotebookLM: center is Source AI Chat first, left is Sources/References first, right is Notes list/cards, and preview is secondary.
+- Phase 2.5D adds in-memory note delete and note-to-source conversion inside the current chat/conversation scope.
+- Phase 2.5D.1 moves Sources/Notes in-memory state to shared frontend Recoil state so it survives Chat/Cowork/Code/Sources mode switching while remaining scoped by conversation.
+- Phase 2.6 moves Sources/Notebook access out of the main workspace tabs and into a per-chat `Notebook` button in the Chat header. The old top-level Sources tab is hidden/removed from main tabs.
+- Phase 3A adds frontend-only source chunks/sections and context estimates. Chunks are created in-memory for pasted text, `.txt`, `.md`, and note-created sources; selected source detail shows chunk count, rough token estimate, compact section list, and selected chunk preview. Smart context selection, clickable citations, vector DB/RAG, and persistence are still deferred.
+- Phase 3B adds Smart Context Selection Lite for Source AI Chat. It uses frontend-only keyword/chunk scoring over enabled ready source chunks, preserves source/section labels in the prompt, and shows compact context feedback after answers. There is still no vector DB/RAG, embedding, semantic search, clickable citation system, persistence, Attach to Chat, or normal Chat source reading.
+- Phase 4A-Lite enables Source AI Chat inside Notebook. It reads only enabled `ready` sources from the current chat/conversation, sends a direct source-context prompt through a non-persistent workspace source-chat route, and keeps Source AI messages in frontend conversation-scoped Recoil state.
+- Phase 4A.2 upgrades Source AI Chat behavior from strict source-only lookup to Notebook librarian behavior: general notebook/help questions are allowed, source-grounded answers still cite enabled ready sources, and source analysis/inference must separate source facts from interpretation.
+- Phase 4A.3 adds frontend-only editable notes in Notebook. Notes can be edited, saved, or cancelled in-memory per conversation. Note-to-source auto-sync remains deferred; sources already created from notes do not update automatically.
+- New Chat fallback migration is fixed: Notebook state created before the first user message under `Constants.NEW_CONVO` is moved into the real conversation id when it appears. This covers sources, selected source, notes, note draft, Source AI Chat messages, and Source AI Chat draft, and remains frontend-only in-memory state with no persistence.
 - Keep frontend-only/manual source creation from pasted text, `.txt`, and `.md`.
 - Keep source list, source status, enable/disable, remove, and read-only preview.
 - Scope in-memory Sources and manual Notes state by current chat/conversation id using existing conversation state.
 - Do not start Cowork Auto, Code Auto, Studio outputs, crawler/OCR, Google Drive sync, or a heavy vector database/RAG pipeline.
+- Source grounding is still lightweight and frontend-only: no vector DB/RAG, embeddings, semantic search, clickable citations, source persistence, Attach to Chat, or normal Chat source reading. Citations are simple source/section labels such as `[Source: filename]` or `[Source: filename / Section: heading]`.
 
 Do not start this yet unless requested:
 
@@ -318,7 +332,7 @@ type CoworkDraft = {
   steps: Array<{
     id: string;
     title: string;
-    status: 'todo' | 'doing' | 'done' | 'blocked';
+    status: "todo" | "doing" | "done" | "blocked";
   }>;
   suggestedFiles: string[];
   risks: string[];
@@ -898,15 +912,19 @@ Defer these:
 
 ### Recommended App Placement
 
-Add a new top-level workspace tab after Code:
+Sources/Notebook now opens from the current Chat instead of a top-level workspace tab:
 
 ```text
-Chat | Cowork | Code | Sources
+Chat header -> Notebook
 ```
 
-`Sources` is clearer than `NotebookLM` because it describes what the mode does and avoids implying this is Google's product.
+The main workspace tabs stay focused on:
 
-If the UI later needs multiple notebooks, `Sources` can contain a notebook selector at the top.
+```text
+Chat | Cowork | Code
+```
+
+`Notebook` is the chat-scoped entry label. The implementation still avoids implying this is Google's product.
 
 ### Core UI Layout
 
@@ -1007,7 +1025,7 @@ type Source = {
   id: string;
   notebookId: string;
   title: string;
-  type: 'text' | 'markdown' | 'pdf' | 'url';
+  type: "text" | "markdown" | "pdf" | "url";
   content: string;
   sizeBytes: number;
   enabled: boolean;
@@ -1064,10 +1082,18 @@ Current implementation:
 - Phase 2.5 changes Sources into a full NotebookLM-style workspace on desktop: left source list/add source, center librarian/chat placeholder plus preview, right manual notes placeholder.
 - Phase 2.5 keys in-memory Sources and Notes state by the current chat/conversation id. There is still no backend route or persistence yet.
 - Phase 2.5C corrects the information hierarchy: the center column is Source AI Chat with a disabled bottom input, the left column is References with compact add-source disclosure, the right column is Notes cards/list with Add note, and selected-source preview is secondary in the left column.
+- Phase 2.5D adds manual note deletion and `Add to sources` for notes. Converted note sources are frontend-only, labeled `From note`, use the same safety/size/status rules as pasted sources, and appear in the left References list for the current chat.
+- Phase 2.5D.1 stores Sources, selected source id, Notes, and note draft in Recoil atom families keyed by conversation id. This is still in-memory only and does not persist through page refresh or server restart.
+- Phase 2.6 removes Sources from the main Chat/Cowork/Code workspace tabs. Chat now has a `Notebook` button in the header that opens the full NotebookLM-style `SourcesPanel` as a per-chat overlay with `Back to Chat`.
+- Phase 3A adds source chunk metadata for pasted text, `.txt`, `.md`, and note-created sources. Markdown chunks split by headings when available, otherwise by paragraph; tables are kept whole when visible as table blocks; long text paragraphs split by byte size. Selected source detail shows chunk count, rough token estimate, warning for large sources, and a compact chunk preview. Source AI Chat still uses the direct context path and existing context cap.
+- Phase 3B changes Source AI Chat context assembly from full-source-first direct context to Smart Context Selection Lite. The frontend scores chunks with simple normalized keyword, substring, heading, and source-title matches, then includes the best chunks within the existing 24 KB cap. If no chunk matches, it falls back to first chunks and surfaces that fallback in the chat message metadata. This remains non-persistent and has no embeddings, vector DB/RAG, semantic search, clickable citations, or normal Chat integration.
+- Phase 4A-Lite makes Source AI Chat usable as a direct-context MVP. It filters to enabled + ready sources, caps combined source context at 24 KB, asks the current chat model to answer only from those sources, and stores the Notebook chat transcript in memory by conversation id.
+- Phase 4A.2 changes the Source AI prompt into Notebook librarian behavior. It can answer general questions about itself and how to use Notebook/Sources without source evidence, answers source-content questions from enabled ready sources, and can summarize/analyze/compare sources while separating "Source says" from analysis or inference.
+- Phase 4A.3 adds editable note cards with Save/Cancel. Edits update only the current conversation-scoped in-memory note state. Creating a source after editing uses the latest note content, but existing note-created sources are not auto-synced.
 - Sources show title, type, size, status, enabled state, added date, and read-only preview.
 - Secret-like, risky, unsupported, too-large, and parse-error sources are surfaced with explicit statuses.
 - Current size limit is 100 KB per source for the frontend-only MVP.
-- Source AI chat, note-to-source, citations, chunking, RAG, Studio outputs, and Attach to Chat are still deferred.
+- Full chunking/source grounding, clickable citations, vector DB/RAG, Studio outputs, persistence, and Attach to Chat are still deferred.
 
 ### Acceptance Criteria
 
@@ -1092,7 +1118,6 @@ After MVP:
 - Add better chunking and clickable citations.
 - Add source search.
 - Add source compare/contradiction finder.
-- Add note-to-source conversion.
 - Add Notebook Guide caching.
 - Add Studio outputs later only when the core source workflow is stable.
 

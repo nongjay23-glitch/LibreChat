@@ -1,17 +1,16 @@
-import { useMemo } from 'react';
-import { useRecoilValue } from 'recoil';
-import { BookOpenText, Code2, MessagesSquare, UsersRound } from 'lucide-react';
-import { useUserKeyQuery } from 'librechat-data-provider/react-query';
-import { getConfigDefaults, getEndpointField } from 'librechat-data-provider';
-import type { TEndpointsConfig } from 'librechat-data-provider';
-import type { NavLink } from '~/common';
-import ConversationsSection from '~/components/UnifiedSidebar/ConversationsSection';
-import { useGetEndpointsQuery, useGetStartupConfig } from '~/data-provider';
-import useSideNavLinks from '~/hooks/Nav/useSideNavLinks';
-import CodePanel from '~/components/Workspace/CodePanel';
-import SourcesPanel from '~/components/Workspace/SourcesPanel';
-import store from '~/store';
-import CoworkPanel from '~/components/Workspace/CoworkPanel';
+import { useMemo } from "react";
+import { useRecoilValue } from "recoil";
+import { Code2, MessagesSquare, UsersRound } from "lucide-react";
+import { useUserKeyQuery } from "librechat-data-provider/react-query";
+import { getConfigDefaults, getEndpointField } from "librechat-data-provider";
+import type { TEndpointsConfig } from "librechat-data-provider";
+import type { NavLink } from "~/common";
+import ConversationsSection from "~/components/UnifiedSidebar/ConversationsSection";
+import { useGetEndpointsQuery, useGetStartupConfig } from "~/data-provider";
+import useSideNavLinks from "~/hooks/Nav/useSideNavLinks";
+import CodePanel from "~/components/Workspace/CodePanel";
+import store from "~/store";
+import CoworkPanel from "~/components/Workspace/CoworkPanel";
 
 const defaultInterface = getConfigDefaults().interface;
 
@@ -19,7 +18,8 @@ export default function useUnifiedSidebarLinks() {
   const conversation = useRecoilValue(store.conversationByIndex(0));
   const endpoint = conversation?.endpoint;
   const { data: startupConfig } = useGetStartupConfig();
-  const { data: endpointsConfig = {} as TEndpointsConfig } = useGetEndpointsQuery();
+  const { data: endpointsConfig = {} as TEndpointsConfig } =
+    useGetEndpointsQuery();
 
   const interfaceConfig = useMemo(
     () => startupConfig?.interface ?? defaultInterface,
@@ -27,19 +27,21 @@ export default function useUnifiedSidebarLinks() {
   );
 
   const endpointType = useMemo(
-    () => getEndpointField(endpointsConfig, endpoint, 'type'),
+    () => getEndpointField(endpointsConfig, endpoint, "type"),
     [endpoint, endpointsConfig],
   );
 
   const userProvidesKey = useMemo(
-    () => !!(endpointsConfig?.[endpoint ?? '']?.userProvide ?? false),
+    () => !!(endpointsConfig?.[endpoint ?? ""]?.userProvide ?? false),
     [endpointsConfig, endpoint],
   );
 
-  const { data: keyExpiry = { expiresAt: undefined } } = useUserKeyQuery(endpoint ?? '');
+  const { data: keyExpiry = { expiresAt: undefined } } = useUserKeyQuery(
+    endpoint ?? "",
+  );
 
   const keyProvided = useMemo(
-    () => (userProvidesKey ? !!(keyExpiry.expiresAt ?? '') : true),
+    () => (userProvidesKey ? !!(keyExpiry.expiresAt ?? "") : true),
     [keyExpiry.expiresAt, userProvidesKey],
   );
 
@@ -54,35 +56,27 @@ export default function useUnifiedSidebarLinks() {
 
   const links = useMemo(() => {
     const conversationLink: NavLink = {
-      title: 'com_ui_chat_history',
-      label: '',
+      title: "com_ui_chat_history",
+      label: "",
       icon: MessagesSquare,
-      id: 'conversations',
+      id: "conversations",
       Component: ConversationsSection,
     };
     const coworkLink: NavLink = {
-      title: 'com_ui_cowork',
-      label: '',
+      title: "com_ui_cowork",
+      label: "",
       icon: UsersRound,
-      id: 'cowork',
+      id: "cowork",
       Component: CoworkPanel,
     };
     const codeLink: NavLink = {
-      title: 'com_ui_code',
-      label: '',
+      title: "com_ui_code",
+      label: "",
       icon: Code2,
-      id: 'code-workspace',
+      id: "code-workspace",
       Component: CodePanel,
     };
-    const sourcesLink: NavLink = {
-      title: 'com_ui_sources',
-      label: '',
-      icon: BookOpenText,
-      id: 'sources',
-      Component: SourcesPanel,
-    };
-
-    return [conversationLink, coworkLink, codeLink, sourcesLink, ...sideNavLinks];
+    return [conversationLink, coworkLink, codeLink, ...sideNavLinks];
   }, [sideNavLinks]);
 
   return links;

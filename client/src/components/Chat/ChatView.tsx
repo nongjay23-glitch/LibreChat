@@ -1,30 +1,37 @@
-import { memo, useCallback } from 'react';
-import { useRecoilValue } from 'recoil';
-import { useForm } from 'react-hook-form';
-import { Spinner } from '@librechat/client';
-import { useParams } from 'react-router-dom';
-import { Constants, buildTree } from 'librechat-data-provider';
-import type { TChatProject, TMessage } from 'librechat-data-provider';
-import type { ChatFormValues } from '~/common';
+import { memo, useCallback, useState } from "react";
+import { useRecoilValue } from "recoil";
+import { useForm } from "react-hook-form";
+import { Spinner } from "@librechat/client";
+import { useParams } from "react-router-dom";
+import { Constants, buildTree } from "librechat-data-provider";
+import { ArrowLeft } from "lucide-react";
+import type { TChatProject, TMessage } from "librechat-data-provider";
+import type { ChatFormValues } from "~/common";
 import {
   useAddedResponse,
   useResumeOnLoad,
   useAdaptiveSSE,
   useChatHelpers,
   useLocalize,
-} from '~/hooks';
-import { ChatContext, AddedChatContext, ChatFormProvider, useFileMapContext } from '~/Providers';
-import ConversationStarters from './Input/ConversationStarters';
-import { useGetMessagesByConvoId } from '~/data-provider';
-import ProjectLandingChip from './ProjectLandingChip';
-import MessagesView from './Messages/MessagesView';
-import Presentation from './Presentation';
-import ChatForm from './Input/ChatForm';
-import Landing from './Landing';
-import Header from './Header';
-import Footer from './Footer';
-import { cn } from '~/utils';
-import store from '~/store';
+} from "~/hooks";
+import {
+  ChatContext,
+  AddedChatContext,
+  ChatFormProvider,
+  useFileMapContext,
+} from "~/Providers";
+import ConversationStarters from "./Input/ConversationStarters";
+import { useGetMessagesByConvoId } from "~/data-provider";
+import ProjectLandingChip from "./ProjectLandingChip";
+import MessagesView from "./Messages/MessagesView";
+import Presentation from "./Presentation";
+import ChatForm from "./Input/ChatForm";
+import Landing from "./Landing";
+import Header from "./Header";
+import Footer from "./Footer";
+import SourcesPanel from "~/components/Workspace/SourcesPanel";
+import { cn } from "~/utils";
+import store from "~/store";
 
 function LoadingSpinner() {
   return (
@@ -36,21 +43,28 @@ function LoadingSpinner() {
   );
 }
 
-function ChatView({ index = 0, project }: { index?: number; project?: TChatProject }) {
+function ChatView({
+  index = 0,
+  project,
+}: {
+  index?: number;
+  project?: TChatProject;
+}) {
   const { conversationId } = useParams();
   const localize = useLocalize();
   const rootSubmission = useRecoilValue(store.submissionByIndex(index));
   const isSubmitting = useRecoilValue(store.isSubmittingFamily(index));
   const centerFormOnLanding = useRecoilValue(store.centerFormOnLanding);
+  const [isNotebookOpen, setIsNotebookOpen] = useState(false);
 
   const methods = useForm<ChatFormValues>({
-    defaultValues: { text: '' },
+    defaultValues: { text: "" },
   });
 
   const fileMap = useFileMapContext();
 
   const { data: messagesTree = null, isLoading } = useGetMessagesByConvoId(
-    conversationId ?? '',
+    conversationId ?? "",
     {
       select: useCallback(
         (data: TMessage[]) => {
@@ -77,7 +91,8 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
   const isLandingPage =
     (!messagesTree || messagesTree.length === 0) &&
     (conversationId === Constants.NEW_CONVO || !conversationId);
-  const isNavigating = (!messagesTree || messagesTree.length === 0) && conversationId != null;
+  const isNavigating =
+    (!messagesTree || messagesTree.length === 0) && conversationId != null;
   const isProjectLandingPage = isLandingPage && project != null;
 
   if (isLoading && conversationId !== Constants.NEW_CONVO) {
@@ -92,7 +107,7 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
 
   const chatFormPlaceholder =
     isProjectLandingPage && project
-      ? localize('com_ui_new_chat_in_project', { name: project.name })
+      ? localize("com_ui_new_chat_in_project", { name: project.name })
       : undefined;
 
   return (
@@ -101,24 +116,27 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
         <AddedChatContext.Provider value={addedChatHelpers}>
           <Presentation>
             <div className="relative flex h-full w-full flex-col">
-              <Header />
+              <Header onOpenNotebook={() => setIsNotebookOpen(true)} />
               <>
                 <div
                   className={cn(
-                    'flex flex-col',
+                    "flex flex-col",
                     isLandingPage
-                      ? 'flex-1 items-center justify-end sm:justify-center'
-                      : 'h-full overflow-y-auto',
+                      ? "flex-1 items-center justify-end sm:justify-center"
+                      : "h-full overflow-y-auto",
                   )}
                 >
                   {content}
                   <div
                     className={cn(
-                      'w-full',
-                      isLandingPage && 'max-w-3xl transition-all duration-200 xl:max-w-4xl',
+                      "w-full",
+                      isLandingPage &&
+                        "max-w-3xl transition-all duration-200 xl:max-w-4xl",
                     )}
                   >
-                    {isProjectLandingPage && project && <ProjectLandingChip project={project} />}
+                    {isProjectLandingPage && project && (
+                      <ProjectLandingChip project={project} />
+                    )}
                     {isLandingPage && <ConversationStarters />}
                     <ChatForm index={index} placeholder={chatFormPlaceholder} />
                     {!isLandingPage && <Footer />}
@@ -126,6 +144,26 @@ function ChatView({ index = 0, project }: { index?: number; project?: TChatProje
                 </div>
                 {isLandingPage && <Footer />}
               </>
+              {isNotebookOpen ? (
+                <div className="absolute inset-0 z-30 flex min-h-0 flex-col bg-surface-primary text-text-primary">
+                  <div className="flex h-[52px] shrink-0 items-center justify-between gap-3 border-b border-border-light bg-surface-primary px-4">
+                    <button
+                      type="button"
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-border-light px-3 text-sm font-semibold transition-colors hover:bg-surface-hover"
+                      onClick={() => setIsNotebookOpen(false)}
+                    >
+                      <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                      {localize("com_ui_sources_back_to_chat")}
+                    </button>
+                    <span className="truncate text-sm font-semibold text-text-secondary">
+                      {localize("com_ui_sources_chat_notebook")}
+                    </span>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <SourcesPanel />
+                  </div>
+                </div>
+              ) : null}
             </div>
           </Presentation>
         </AddedChatContext.Provider>
