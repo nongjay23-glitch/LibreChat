@@ -371,6 +371,15 @@ export default function SourcesPanel() {
     [sources],
   );
 
+  const hasNotebookData = useMemo(
+    () =>
+      sources.length > 0 ||
+      selectedSourceId != null ||
+      notes.length > 0 ||
+      noteDraft.trim().length > 0,
+    [noteDraft, notes.length, selectedSourceId, sources.length],
+  );
+
   const setCurrentSources = (
     updater: (currentSources: NotebookSource[]) => NotebookSource[],
   ) => {
@@ -753,6 +762,28 @@ export default function SourcesPanel() {
     }
   };
 
+  const clearNotebook = () => {
+    if (!hasNotebookData) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      localize("com_ui_sources_clear_confirm"),
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setSources([]);
+    setSelectedSourceId(null);
+    setNotes([]);
+    setNoteDraft("");
+    setEditingNoteId(null);
+    setEditingNoteDraft("");
+    setEditingNoteError("");
+    setSelectedChunkId(null);
+  };
+
   const renderStatusBadge = (status: SourceStatus) => (
     <span
       className={cn(
@@ -781,10 +812,13 @@ export default function SourcesPanel() {
                 <h2 className="truncate text-lg font-semibold">
                   {localize("com_ui_sources")}
                 </h2>
+                <p className="mt-1 text-xs text-text-secondary">
+                  {localize("com_ui_sources_saved_locally")}
+                </p>
               </div>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+          <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-text-secondary">
             <span className="rounded-md border border-border-light px-2 py-1">
               {localize("com_ui_sources_chat_source_count", {
                 count: enabledCount,
@@ -793,6 +827,15 @@ export default function SourcesPanel() {
             <span className="rounded-md border border-border-light px-2 py-1">
               {notes.length} {localize("com_ui_sources_notes")}
             </span>
+            <button
+              type="button"
+              disabled={!hasNotebookData}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-light px-3 text-xs font-semibold text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:text-text-secondary disabled:opacity-60"
+              onClick={clearNotebook}
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+              {localize("com_ui_sources_clear_notebook")}
+            </button>
           </div>
         </div>
       </div>
@@ -813,14 +856,16 @@ export default function SourcesPanel() {
                   {enabledCount}/{sources.length}
                 </span>
               </div>
-              <button
-                type="button"
-                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
-                onClick={() => setIsAddSourceOpen((open) => !open)}
-              >
-                <FilePlus2 className="h-3.5 w-3.5" aria-hidden="true" />
-                {localize("com_ui_sources_add_source")}
-              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
+                  onClick={() => setIsAddSourceOpen((open) => !open)}
+                >
+                  <FilePlus2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  {localize("com_ui_sources_add_source")}
+                </button>
+              </div>
             </div>
             <input
               ref={fileInputRef}
@@ -1309,9 +1354,9 @@ export default function SourcesPanel() {
               {localize("com_ui_sources_add_note")}
             </button>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+          <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden p-3">
             <textarea
-              className="min-h-[84px] resize-y rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
+              className="min-h-[84px] resize-none rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
               value={noteDraft}
               placeholder={localize("com_ui_sources_notes_placeholder")}
               aria-label={localize("com_ui_sources_notes")}
@@ -1333,7 +1378,7 @@ export default function SourcesPanel() {
                     {isEditing ? (
                       <div className="space-y-2">
                         <textarea
-                          className="min-h-[96px] w-full resize-y rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
+                          className="min-h-[96px] w-full resize-none rounded-md border border-border-light bg-surface-primary px-3 py-2 text-sm outline-none focus:border-blue-500"
                           value={editingNoteDraft}
                           aria-label={localize("com_ui_sources_edit_note")}
                           onChange={(event) => {
