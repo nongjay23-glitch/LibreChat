@@ -29,6 +29,7 @@ const invalidKeys = {
  * pasted content that happens to start with a command character.
  */
 const MAX_COMMAND_TRIGGER_LENGTH = 5;
+const sourceCommand = '/source';
 const shouldTriggerCommand = (
   textAreaRef: React.RefObject<HTMLTextAreaElement>,
   commandChar: string,
@@ -44,6 +45,11 @@ const shouldTriggerCommand = (
   }
 
   return startPos === 1 || (startPos === text.length && text.length <= MAX_COMMAND_TRIGGER_LENGTH);
+};
+
+const isSourceCommandText = (value: string) => {
+  const trimmedValue = value.trimStart();
+  return trimmedValue === sourceCommand || trimmedValue.startsWith(`${sourceCommand} `);
 };
 
 /**
@@ -109,7 +115,7 @@ const useHandleKeyUp = ({
       return;
     }
     if (shouldTriggerCommand(textAreaRef, '/')) {
-      setShowPromptsPopover(true);
+      setShowPromptsPopover(false);
     }
   }, [textAreaRef, hasPromptsAccess, setShowPromptsPopover, slashCommandEnabled]);
 
@@ -174,6 +180,11 @@ const useHandleKeyUp = ({
         return;
       }
 
+      if (isSourceCommandText(text)) {
+        setShowPromptsPopover(false);
+        return;
+      }
+
       if (invalidKeys[event.key as keyof typeof invalidKeys]) {
         return;
       }
@@ -185,7 +196,7 @@ const useHandleKeyUp = ({
         handler();
       }
     },
-    [textAreaRef, commandHandlers, handleUpArrow],
+    [textAreaRef, commandHandlers, handleUpArrow, setShowPromptsPopover],
   );
 
   return handleKeyUp;

@@ -46,18 +46,17 @@ import {
 } from "~/components/Workspace/sourceContext";
 import { useAuthContext } from "~/hooks";
 
-const notebookSlashCommands = ["/source", "/notebook", "/ซอส", "/เธเธญเธช"];
+const sourceSlashCommand = "/source";
 const noEnabledNotebookSourcesMessage =
   "ตอนนี้ไม่มี Notebook source ที่เปิดใช้งานอยู่ จึงไม่สามารถตอบจากแหล่งข้อมูลได้";
 
 const getNotebookRequest = (text: string) => {
   const trimmedText = text.trim();
-  const matchedCommand = notebookSlashCommands.find(
-    (command) =>
-      trimmedText === command || trimmedText.startsWith(`${command} `),
-  );
+  const isSourceCommand =
+    trimmedText === sourceSlashCommand ||
+    trimmedText.startsWith(`${sourceSlashCommand} `);
 
-  if (!matchedCommand) {
+  if (!isSourceCommand) {
     return {
       mode: "auto" as const,
       question: trimmedText,
@@ -67,7 +66,7 @@ const getNotebookRequest = (text: string) => {
 
   return {
     mode: "force" as const,
-    question: trimmedText.slice(matchedCommand.length).trim(),
+    question: trimmedText.slice(sourceSlashCommand.length).trim(),
     isForceMode: true,
   };
 };

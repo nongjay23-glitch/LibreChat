@@ -14,6 +14,14 @@ import { useLocalize } from '~/hooks';
 import store from '~/store';
 
 const commandChar = '/';
+const sourceCommandSearch = 'source';
+
+const isSourceCommandSearch = (value: string) => {
+  const trimmedValue = value.trimStart();
+  return (
+    trimmedValue === sourceCommandSearch || trimmedValue.startsWith(`${sourceCommandSearch} `)
+  );
+};
 
 const PopoverContainer = memo(
   ({
@@ -90,6 +98,24 @@ function PromptsCommand({
     setOpen,
   });
 
+  const restoreSourceCommandToTextarea = useCallback(
+    (value: string) => {
+      const textarea = textAreaRef.current;
+      if (!textarea) {
+        return;
+      }
+
+      const restoredValue = `${commandChar}${value.trimStart()}`;
+      textarea.value = restoredValue;
+      textarea.setSelectionRange(restoredValue.length, restoredValue.length);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      requestAnimationFrame(() => {
+        textarea.focus();
+      });
+    },
+    [textAreaRef],
+  );
+
   const handleSelect = useCallback(
     (mention?: PromptOption, e?: React.KeyboardEvent<HTMLInputElement>) => {
       if (!mention) {
@@ -143,6 +169,23 @@ function PromptsCommand({
       setVariableGroup(null);
     }
   }, [open, setSearchValue]);
+
+  useEffect(() => {
+    if (!isSourceCommandSearch(searchValue)) {
+      return;
+    }
+
+    restoreSourceCommandToTextarea(searchValue);
+    setSearchValue('');
+    setOpen(false);
+    setShowPromptsPopover(false);
+  }, [
+    restoreSourceCommandToTextarea,
+    searchValue,
+    setOpen,
+    setSearchValue,
+    setShowPromptsPopover,
+  ]);
 
   useEffect(() => {
     setActiveIndex((prev) => Math.min(prev, Math.max(matches.length - 1, 0)));
@@ -246,7 +289,17 @@ function PromptsCommand({
                 textAreaRef.current?.focus();
               }
             }}
-            onChange={(e) => setSearchValue(e.target.value)}
+            onChange={(e) => {
+              const nextValue = e.target.value;
+              if (isSourceCommandSearch(nextValue)) {
+                restoreSourceCommandToTextarea(nextValue);
+                setSearchValue('');
+                setOpen(false);
+                setShowPromptsPopover(false);
+                return;
+              }
+              setSearchValue(nextValue);
+            }}
             onFocus={() => setOpen(true)}
             onBlur={() => {
               timeoutRef.current = setTimeout(() => {

@@ -271,6 +271,71 @@ const normalizeSearchText = (value: string) =>
 const getCompactSearchText = (value: string) =>
   normalizeSearchText(value).replace(/\s+/g, "");
 
+const thaiFactLookupGroups = [
+  {
+    questionPhrases: [
+      "ชื่อผู้ใช้",
+      "ผู้ใช้งานชื่อ",
+      "ชื่อผู้ใช้งาน",
+      "ผู้ใช้ชื่อ",
+    ],
+    contentPhrases: [
+      "ชื่อผู้ใช้",
+      "ผู้ใช้งานชื่อ",
+      "ชื่อผู้ใช้งาน",
+      "ผู้ใช้ชื่อ",
+      "ผู้ใช้งาน",
+    ],
+  },
+  {
+    questionPhrases: ["รหัส"],
+    contentPhrases: ["รหัส"],
+  },
+  {
+    questionPhrases: ["สีลับ"],
+    contentPhrases: ["สีลับ"],
+  },
+];
+
+const getThaiFactLookupScore = ({
+  question,
+  content,
+  heading,
+  sourceTitle,
+}: {
+  question: string;
+  content: string;
+  heading: string;
+  sourceTitle: string;
+}) => {
+  const compactQuestion = getCompactSearchText(question);
+  if (!compactQuestion) {
+    return 0;
+  }
+
+  const compactContent = getCompactSearchText(
+    `${content} ${heading} ${sourceTitle}`,
+  );
+  if (!compactContent) {
+    return 0;
+  }
+
+  return thaiFactLookupGroups.some(({ questionPhrases, contentPhrases }) => {
+    const questionMatches = questionPhrases.some((phrase) =>
+      compactQuestion.includes(getCompactSearchText(phrase)),
+    );
+    if (!questionMatches) {
+      return false;
+    }
+
+    return contentPhrases.some((phrase) =>
+      compactContent.includes(getCompactSearchText(phrase)),
+    );
+  })
+    ? 16
+    : 0;
+};
+
 const getQuestionTerms = (question: string) => {
   const normalizedQuestion = normalizeSearchText(question);
   const compactQuestion = getCompactSearchText(question);
@@ -334,6 +399,13 @@ const scoreChunkForQuestion = ({
   if (normalizedQuestion && normalizedTitle.includes(normalizedQuestion)) {
     score += 8;
   }
+
+  score += getThaiFactLookupScore({
+    question,
+    content: chunk.content,
+    heading: chunk.heading ?? "",
+    sourceTitle,
+  });
 
   terms.forEach((term) => {
     if (term.length < 2) {
