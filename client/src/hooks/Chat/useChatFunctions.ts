@@ -1,8 +1,8 @@
-import { v4 } from 'uuid';
-import { cloneDeep } from 'lodash';
-import { useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
-import { useSetRecoilState, useRecoilValue, useRecoilCallback } from 'recoil';
+import { v4 } from "uuid";
+import { cloneDeep } from "lodash";
+import { useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { useSetRecoilState, useRecoilValue, useRecoilCallback } from "recoil";
 import {
   Constants,
   QueryKeys,
@@ -14,7 +14,7 @@ import {
   replaceSpecialVars,
   isAssistantsEndpoint,
   getDefaultParamsEndpoint,
-} from 'librechat-data-provider';
+} from "librechat-data-provider";
 import type {
   TMessage,
   TSubmission,
@@ -22,28 +22,62 @@ import type {
   TStartupConfig,
   TEndpointOption,
   TEndpointsConfig,
+  TNotebookContext,
   EndpointSchemaKey,
-} from 'librechat-data-provider';
-import type { SetterOrUpdater } from 'recoil';
-import type { TAskFunction, ExtendedFile } from '~/common';
+} from "librechat-data-provider";
+import type { SetterOrUpdater } from "recoil";
+import type { TAskFunction, ExtendedFile } from "~/common";
 import {
   logger,
   hasStreamStartFailed,
   createDualMessageContent,
   getRouteChatProjectId,
-} from '~/utils';
-import useFocusRegeneratedResponse from '~/hooks/Chat/useFocusRegeneratedResponse';
-import useSetFilesToDelete from '~/hooks/Files/useSetFilesToDelete';
-import useGetSender from '~/hooks/Conversations/useGetSender';
-import store, { useGetEphemeralAgent } from '~/store';
-import { startupConfigKey } from '~/data-provider';
-import useUserKey from '~/hooks/Input/useUserKey';
-import { useAuthContext } from '~/hooks';
+} from "~/utils";
+import useFocusRegeneratedResponse from "~/hooks/Chat/useFocusRegeneratedResponse";
+import useSetFilesToDelete from "~/hooks/Files/useSetFilesToDelete";
+import useGetSender from "~/hooks/Conversations/useGetSender";
+import store, { useGetEphemeralAgent } from "~/store";
+import { startupConfigKey } from "~/data-provider";
+import useUserKey from "~/hooks/Input/useUserKey";
+import {
+  getReadyNotebookSources,
+  getTextBytes,
+  selectNotebookSourceContext,
+} from "~/components/Workspace/sourceContext";
+import { useAuthContext } from "~/hooks";
+
+const notebookSlashCommands = ["/source", "/notebook", "/ซอส", "/เธเธญเธช"];
+const noEnabledNotebookSourcesMessage =
+  "ตอนนี้ไม่มี Notebook source ที่เปิดใช้งานอยู่ จึงไม่สามารถตอบจากแหล่งข้อมูลได้";
+
+const getNotebookRequest = (text: string) => {
+  const trimmedText = text.trim();
+  const matchedCommand = notebookSlashCommands.find(
+    (command) =>
+      trimmedText === command || trimmedText.startsWith(`${command} `),
+  );
+
+  if (!matchedCommand) {
+    return {
+      mode: "auto" as const,
+      question: trimmedText,
+      isForceMode: false,
+    };
+  }
+
+  return {
+    mode: "force" as const,
+    question: trimmedText.slice(matchedCommand.length).trim(),
+    isForceMode: true,
+  };
+};
 
 const logChatRequest = (request: Record<string, unknown>) => {
-  logger.log('=====================================\nAsk function called with:');
+  logger.log(
+    "=====================================\nAsk function called with:",
+  );
   logger.dir(request);
-  logger.log('=====================================');
+  logger.log("=====================================");
 };
 
 const getAppendParentMessageId = ({
@@ -74,7 +108,7 @@ const getAppendParentMessageId = ({
 const hasPendingAssistantParent = (message: TMessage | null) =>
   !!message?.messageId &&
   message.isCreatedByUser !== true &&
-  message.messageId.endsWith('_') &&
+  message.messageId.endsWith("_") &&
   message.createdAt == null &&
   message.updatedAt == null &&
   !hasStreamStartFailed(message);
@@ -98,11 +132,11 @@ const isAssistantResponseForParent = (
 export function getPreliminaryRegenerateResponseMessageId(
   responseMessageId?: string | null,
 ): string | null {
-  if (typeof responseMessageId !== 'string' || responseMessageId.length === 0) {
+  if (typeof responseMessageId !== "string" || responseMessageId.length === 0) {
     return null;
   }
 
-  return `${responseMessageId.replace(/_+$/, '')}_`;
+  return `${responseMessageId.replace(/_+$/, "")}_`;
 }
 
 export function getRegenerateTargetResponseMessage({
@@ -210,9 +244,11 @@ export default function useChatFunctions({
   const setFilesToDelete = useSetFilesToDelete();
   const getEphemeralAgent = useGetEphemeralAgent();
   const isTemporary = useRecoilValue(store.isTemporary);
-  const { getExpiry } = useUserKey(immutableConversation?.endpoint ?? '');
+  const { getExpiry } = useUserKey(immutableConversation?.endpoint ?? "");
   const setIsSubmitting = useSetRecoilState(store.isSubmittingFamily(index));
-  const setShowStopButton = useSetRecoilState(store.showStopButtonByIndex(index));
+  const setShowStopButton = useSetRecoilState(
+    store.showStopButtonByIndex(index),
+  );
   const focusRegeneratedResponse = useFocusRegeneratedResponse();
 
   /**
@@ -229,8 +265,11 @@ export default function useChatFunctions({
   const drainPendingManualSkills = useRecoilCallback(
     ({ snapshot, reset }) =>
       (convoId: string): string[] => {
-        const loadable = snapshot.getLoadable(store.pendingManualSkillsByConvoId(convoId));
-        const skills = loadable.state === 'hasValue' ? (loadable.contents as string[]) : [];
+        const loadable = snapshot.getLoadable(
+          store.pendingManualSkillsByConvoId(convoId),
+        );
+        const skills =
+          loadable.state === "hasValue" ? (loadable.contents as string[]) : [];
         if (skills.length > 0) {
           reset(store.pendingManualSkillsByConvoId(convoId));
         }
@@ -248,8 +287,11 @@ export default function useChatFunctions({
   const drainPendingQuotes = useRecoilCallback(
     ({ snapshot, reset }) =>
       (convoId: string): string[] => {
-        const loadable = snapshot.getLoadable(store.pendingQuotesByConvoId(convoId));
-        const quotes = loadable.state === 'hasValue' ? (loadable.contents as string[]) : [];
+        const loadable = snapshot.getLoadable(
+          store.pendingQuotesByConvoId(convoId),
+        );
+        const quotes =
+          loadable.state === "hasValue" ? (loadable.contents as string[]) : [];
         if (quotes.length > 0) {
           reset(store.pendingQuotesByConvoId(convoId));
         }
@@ -261,12 +303,130 @@ export default function useChatFunctions({
   const drainPendingCodeContext = useRecoilCallback(
     ({ snapshot, reset }) =>
       (convoId: string) => {
-        const loadable = snapshot.getLoadable(store.pendingCodeContextByConvoId(convoId));
-        const codeContext = loadable.state === 'hasValue' ? loadable.contents : null;
+        const loadable = snapshot.getLoadable(
+          store.pendingCodeContextByConvoId(convoId),
+        );
+        const codeContext =
+          loadable.state === "hasValue" ? loadable.contents : null;
         if (codeContext != null) {
           reset(store.pendingCodeContextByConvoId(convoId));
         }
         return codeContext;
+      },
+    [],
+  );
+
+  const buildNotebookContext = useRecoilCallback(
+    ({ snapshot, set }) =>
+      ({
+        convoId,
+        question,
+        mode,
+      }: {
+        convoId: string;
+        question: string;
+        mode: "auto" | "force";
+      }): TNotebookContext | null => {
+        const sourcesLoadable = snapshot.getLoadable(
+          store.workspaceSourcesByConversationId(convoId),
+        );
+        let sources =
+          sourcesLoadable.state === "hasValue" ? sourcesLoadable.contents : [];
+
+        /**
+         * Fallback: if this is a real conversation (not NEW_CONVO) with no
+         * sources, check whether sources were created under the NEW_CONVO key
+         * before the conversation got a real id. NotebookSourcesToggle used to
+         * handle this migration, but it may not be rendered. Migrate sources
+         * atomically so future reads from the real id succeed.
+         */
+        if (
+          sources.length === 0 &&
+          convoId !== Constants.NEW_CONVO
+        ) {
+          const fallbackLoadable = snapshot.getLoadable(
+            store.workspaceSourcesByConversationId(Constants.NEW_CONVO),
+          );
+          const fallbackSources =
+            fallbackLoadable.state === "hasValue"
+              ? fallbackLoadable.contents
+              : [];
+          if (fallbackSources.length > 0) {
+            sources = fallbackSources;
+            set(store.workspaceSourcesByConversationId(convoId), fallbackSources);
+            set(store.workspaceSourcesByConversationId(Constants.NEW_CONVO), []);
+          }
+        }
+
+        const readySources = getReadyNotebookSources(sources);
+        if (readySources.length === 0) {
+          if (mode !== "force") {
+            return null;
+          }
+
+          const content = [
+            "Notebook mode is on, but there are currently no enabled ready Notebook sources for this conversation.",
+            "If the user asks about Notebook, source, or reference content, say there are no enabled Notebook sources available right now.",
+            "Do not answer using previous notebook-derived facts as if they are current enabled Notebook sources.",
+            "Do not infer or reveal content from disabled, blocked, too-large, unsupported, or parse-error sources.",
+            "For unrelated general chat, answer normally.",
+          ].join("\n");
+
+          return {
+            id: `notebook-context-empty-${Date.now()}`,
+            title: "Notebook sources unavailable",
+            createdAt: Date.now(),
+            status: "no_enabled_sources",
+            mode,
+            totalBytes: getTextBytes(content),
+            sourceCount: 0,
+            chunkCount: 0,
+            fallback: false,
+            truncated: false,
+            content,
+          };
+        }
+
+        const selection = selectNotebookSourceContext({
+          question,
+          sources: readySources,
+          untitledSourceTitle: "Untitled source",
+          evidencePrefix: "Notebook Evidence",
+          allowFallback: mode === "force",
+          minScore: mode === "force" ? 1 : 12,
+        });
+        if (
+          !selection.sourceBlocks ||
+          selection.contextStats.chunkCount === 0
+        ) {
+          return null;
+        }
+
+        const content = [
+          `Notebook source count: ${selection.contextStats.sourceCount}`,
+          `Notebook chunk count: ${selection.contextStats.chunkCount}`,
+          `Context selection: ${
+            selection.contextStats.fallback
+              ? "fallback first chunks"
+              : "keyword-scored chunks"
+          }`,
+          "",
+          selection.sourceBlocks,
+        ].join("\n");
+
+        return {
+          id: `notebook-context-${Date.now()}`,
+          title: "Notebook sources",
+          createdAt: Date.now(),
+          status: "sources",
+          mode,
+          totalBytes: getTextBytes(content),
+          sourceCount: selection.contextStats.sourceCount,
+          chunkCount: selection.contextStats.chunkCount,
+          fallback: selection.contextStats.fallback,
+          truncated: selection.contextStats.truncated,
+          content,
+        };
       },
     [],
   );
@@ -297,7 +457,14 @@ export default function useChatFunctions({
     setShowStopButton(false);
 
     text = text.trim();
-    if (!!isSubmitting || text === '') {
+    if (!!isSubmitting || text === "") {
+      return;
+    }
+    const notebookRequest = getNotebookRequest(text);
+    const submittedText = notebookRequest.isForceMode
+      ? notebookRequest.question
+      : text;
+    if (notebookRequest.isForceMode && submittedText === "") {
       return;
     }
 
@@ -305,30 +472,32 @@ export default function useChatFunctions({
 
     const endpoint = conversation?.endpoint;
     if (endpoint === null) {
-      console.error('No endpoint available');
+      console.error("No endpoint available");
       return;
     }
 
     conversationId = conversationId ?? conversation?.conversationId ?? null;
-    if (conversationId == 'search') {
-      console.error('cannot send any message under search view!');
+    if (conversationId == "search") {
+      console.error("cannot send any message under search view!");
       return;
     }
 
     if (isContinued && !latestMessage) {
-      console.error('cannot continue AI message without latestMessage!');
+      console.error("cannot continue AI message without latestMessage!");
       return;
     }
 
     if (parentMessageId == null && hasPendingAssistantParent(latestMessage)) {
       logger.warn(
-        '[useChatFunctions] Refusing to append to a preliminary assistant message',
+        "[useChatFunctions] Refusing to append to a preliminary assistant message",
         latestMessage,
       );
       return false;
     }
 
-    const ephemeralAgent = getEphemeralAgent(conversationId ?? Constants.NEW_CONVO);
+    const ephemeralAgent = getEphemeralAgent(
+      conversationId ?? Constants.NEW_CONVO,
+    );
     /**
      * Manual skill selection resolution:
      *  - Explicit `overrideManualSkills` wins (regenerate / save-and-submit
@@ -372,6 +541,17 @@ export default function useChatFunctions({
       !isRegenerate && !isContinued && !isEdited
         ? drainPendingCodeContext(conversationId ?? Constants.NEW_CONVO)
         : null;
+    const notebookContext =
+      !isAssistantsEndpoint(endpoint) &&
+      !isRegenerate &&
+      !isContinued &&
+      !isEdited
+        ? buildNotebookContext({
+            convoId: conversationId ?? Constants.NEW_CONVO,
+            question: submittedText,
+            mode: notebookRequest.mode,
+          })
+        : null;
     const isEditOrContinue = isEdited || isContinued;
 
     let currentMessages: TMessage[] = overrideMessages ?? getMessages() ?? [];
@@ -388,13 +568,18 @@ export default function useChatFunctions({
         ? getRouteChatProjectId()
         : (conversation?.chatProjectId ?? null);
     const conversationForPayload =
-      chatProjectId != null ? { ...(conversation ?? {}), chatProjectId } : (conversation ?? {});
+      chatProjectId != null
+        ? { ...(conversation ?? {}), chatProjectId }
+        : (conversation ?? {});
 
     // construct the query message
     // this is not a real messageId, it is used as placeholder before real messageId returned
     const intermediateId = overrideUserMessageId ?? v4();
     if (parentMessageId == null) {
-      parentMessageId = getAppendParentMessageId({ latestMessage, currentMessages });
+      parentMessageId = getAppendParentMessageId({
+        latestMessage,
+        currentMessages,
+      });
     }
 
     logChatRequest({
@@ -405,17 +590,22 @@ export default function useChatFunctions({
       intermediateId,
       parentMessageId,
       currentMessages,
+      notebookMode: notebookRequest.mode,
     });
 
     if (conversationId == Constants.NEW_CONVO) {
       parentMessageId = Constants.NO_PARENT;
       currentMessages = [];
       conversationId = null;
-      const projectSearch = chatProjectId ? `?projectId=${encodeURIComponent(chatProjectId)}` : '';
+      const projectSearch = chatProjectId
+        ? `?projectId=${encodeURIComponent(chatProjectId)}`
+        : "";
       navigate(`/c/new${projectSearch}`, { state: { focusChat: true } });
     }
 
-    const targetParentMessageId = isRegenerate ? messageId : latestMessage?.parentMessageId;
+    const targetParentMessageId = isRegenerate
+      ? messageId
+      : latestMessage?.parentMessageId;
     /**
      * If the user regenerated or resubmitted the message, the current parent is technically
      * the latest user message, which is passed into `ask`; otherwise, we can rely on the
@@ -435,14 +625,23 @@ export default function useChatFunctions({
 
     let thread_id = targetParentMessage?.thread_id ?? latestMessage?.thread_id;
     if (thread_id == null) {
-      thread_id = currentMessages.find((message) => message.thread_id)?.thread_id;
+      thread_id = currentMessages.find(
+        (message) => message.thread_id,
+      )?.thread_id;
     }
 
-    const endpointsConfig = queryClient.getQueryData<TEndpointsConfig>([QueryKeys.endpoints]);
-    const startupConfig = queryClient.getQueryData<TStartupConfig>(startupConfigKey(true));
-    const endpointType = getEndpointField(endpointsConfig, endpoint, 'type');
+    const endpointsConfig = queryClient.getQueryData<TEndpointsConfig>([
+      QueryKeys.endpoints,
+    ]);
+    const startupConfig = queryClient.getQueryData<TStartupConfig>(
+      startupConfigKey(true),
+    );
+    const endpointType = getEndpointField(endpointsConfig, endpoint, "type");
     const iconURL = conversation?.iconURL;
-    const defaultParamsEndpoint = getDefaultParamsEndpoint(endpointsConfig, endpoint);
+    const defaultParamsEndpoint = getDefaultParamsEndpoint(
+      endpointsConfig,
+      endpoint,
+    );
 
     /** This becomes part of the `endpointOption` */
     const convo = parseCompactConvo({
@@ -452,7 +651,7 @@ export default function useChatFunctions({
       defaultParamsEndpoint,
     });
 
-    const { modelDisplayLabel } = endpointsConfig?.[endpoint ?? ''] ?? {};
+    const { modelDisplayLabel } = endpointsConfig?.[endpoint ?? ""] ?? {};
     const endpointOption = Object.assign(
       {
         endpoint,
@@ -470,16 +669,22 @@ export default function useChatFunctions({
     } else {
       endpointOption.key = new Date(Date.now() + 60 * 60 * 1000).toISOString();
     }
-    const responseSender = getSender({ model: conversation?.model, ...endpointOption });
+    const responseSender = getSender({
+      model: conversation?.model,
+      ...endpointOption,
+    });
 
     const currentMsg: TMessage = {
-      text,
-      sender: 'User',
-      clientTimestamp: new Date().toLocaleString('sv').replace(' ', 'T'),
+      text: submittedText,
+      sender: "User",
+      clientTimestamp: new Date().toLocaleString("sv").replace(" ", "T"),
       isCreatedByUser: true,
       parentMessageId,
       conversationId,
-      messageId: isContinued && messageId != null && messageId ? messageId : intermediateId,
+      messageId:
+        isContinued && messageId != null && messageId
+          ? messageId
+          : intermediateId,
       thread_id,
       error: false,
       /**
@@ -499,6 +704,34 @@ export default function useChatFunctions({
       codeContext: codeContext ?? undefined,
     };
 
+    if (
+      notebookRequest.isForceMode &&
+      notebookContext?.status === "no_enabled_sources"
+    ) {
+      const noSourceResponse: TMessage = {
+        sender: responseSender,
+        text: noEnabledNotebookSourcesMessage,
+        endpoint: endpoint ?? "",
+        parentMessageId: currentMsg.messageId,
+        messageId: `${intermediateId}_notebook_no_sources`,
+        thread_id,
+        conversationId,
+        unfinished: false,
+        isCreatedByUser: false,
+        model: convo?.model,
+        error: false,
+        iconURL,
+      };
+
+      setMessages([...currentMessages, currentMsg, noSourceResponse]);
+      logger.dir("message_stream", {
+        notebookCommand: notebookRequest.mode,
+        skippedModelCall: true,
+        reason: "no_enabled_notebook_sources",
+      });
+      return;
+    }
+
     const submissionFiles = overrideFiles ?? targetParentMessage?.files;
     const reuseFiles =
       (isRegenerate || (overrideFiles != null && overrideFiles.length)) &&
@@ -513,7 +746,7 @@ export default function useChatFunctions({
       currentMsg.files = Array.from(files.values()).map((file) => ({
         file_id: file.file_id,
         filepath: file.filepath,
-        type: file.type ?? '', // Ensure type is not undefined
+        type: file.type ?? "", // Ensure type is not undefined
         height: file.height,
         width: file.width,
       }));
@@ -530,12 +763,13 @@ export default function useChatFunctions({
         : null) ??
       null;
     const initialResponseId =
-      responseMessageId ?? `${isRegenerate ? messageId : intermediateId}`.replace(/_+$/, '') + '_';
+      responseMessageId ??
+      `${isRegenerate ? messageId : intermediateId}`.replace(/_+$/, "") + "_";
 
     const initialResponse: TMessage = {
       sender: responseSender,
-      text: '',
-      endpoint: endpoint ?? '',
+      text: "",
+      endpoint: endpoint ?? "",
       parentMessageId: isRegenerate ? messageId : intermediateId,
       messageId: initialResponseId,
       thread_id,
@@ -558,30 +792,40 @@ export default function useChatFunctions({
     };
 
     if (isAssistantsEndpoint(endpoint)) {
-      initialResponse.model = conversation?.assistant_id ?? '';
-      initialResponse.text = '';
+      initialResponse.model = conversation?.assistant_id ?? "";
+      initialResponse.text = "";
       initialResponse.content = [
         {
           type: ContentTypes.TEXT,
           [ContentTypes.TEXT]: {
-            value: '',
+            value: "",
           },
         },
       ];
     } else if (endpoint != null) {
       initialResponse.model = isAgentsEndpoint(endpoint)
-        ? (conversation?.agent_id ?? '')
-        : (conversation?.model ?? '');
-      initialResponse.text = '';
+        ? (conversation?.agent_id ?? "")
+        : (conversation?.model ?? "");
+      initialResponse.text = "";
 
       if (editedContent && latestMessage?.content) {
         initialResponse.content = cloneDeep(latestMessage.content);
         const { index, type, ...part } = editedContent;
-        if (initialResponse.content && index >= 0 && index < initialResponse.content.length) {
+        if (
+          initialResponse.content &&
+          index >= 0 &&
+          index < initialResponse.content.length
+        ) {
           const contentPart = initialResponse.content[index];
-          if (type === ContentTypes.THINK && contentPart.type === ContentTypes.THINK) {
+          if (
+            type === ContentTypes.THINK &&
+            contentPart.type === ContentTypes.THINK
+          ) {
             contentPart[ContentTypes.THINK] = part[ContentTypes.THINK];
-          } else if (type === ContentTypes.TEXT && contentPart.type === ContentTypes.TEXT) {
+          } else if (
+            type === ContentTypes.TEXT &&
+            contentPart.type === ContentTypes.TEXT
+          ) {
             contentPart[ContentTypes.TEXT] = part[ContentTypes.TEXT];
           }
         }
@@ -602,7 +846,9 @@ export default function useChatFunctions({
     }
 
     if (isContinued) {
-      currentMessages = currentMessages.filter((msg) => msg.messageId !== responseMessageId);
+      currentMessages = currentMessages.filter(
+        (msg) => msg.messageId !== responseMessageId,
+      );
     }
 
     const submissionMessages = isRegenerate
@@ -614,7 +860,7 @@ export default function useChatFunctions({
       : currentMessages;
     const regenerateMessages = isRegenerate ? [...currentMessages] : undefined;
 
-    logger.log('message_state', initialResponse);
+    logger.log("message_state", initialResponse);
     const submission: TSubmission = {
       conversation: {
         ...conversation,
@@ -639,6 +885,7 @@ export default function useChatFunctions({
       addedConvo,
       manualSkills: manualSkills.length > 0 ? manualSkills : undefined,
       codeContext: codeContext ?? undefined,
+      notebookContext: notebookContext ?? undefined,
     };
 
     if (isRegenerate) {
@@ -649,19 +896,55 @@ export default function useChatFunctions({
     }
 
     setSubmission(submission);
-    logger.dir('message_stream', submission, { depth: null });
+    logger.dir("message_stream", {
+      ...submission,
+      codeContext:
+        codeContext != null
+          ? {
+              id: codeContext.id,
+              title: codeContext.title,
+              createdAt: codeContext.createdAt,
+              totalBytes: codeContext.totalBytes,
+              files: codeContext.files.map(({ path, size }) => ({
+                path,
+                size,
+              })),
+            }
+          : undefined,
+      notebookContext:
+        notebookContext != null
+          ? {
+              id: notebookContext.id,
+              title: notebookContext.title,
+              createdAt: notebookContext.createdAt,
+              status: notebookContext.status,
+              mode: notebookContext.mode,
+              totalBytes: notebookContext.totalBytes,
+              sourceCount: notebookContext.sourceCount,
+              chunkCount: notebookContext.chunkCount,
+              fallback: notebookContext.fallback,
+              truncated: notebookContext.truncated,
+            }
+          : undefined,
+    });
   };
 
   const regenerate = (
-    message: Partial<Pick<TMessage, 'messageId' | 'parentMessageId' | 'isCreatedByUser'>>,
+    message: Partial<
+      Pick<TMessage, "messageId" | "parentMessageId" | "isCreatedByUser">
+    >,
     options?: { addedConvo?: TConversation | null },
   ) => {
     const messages = getMessages();
     const parentMessageId =
-      message.isCreatedByUser === true ? message.messageId : message.parentMessageId;
+      message.isCreatedByUser === true
+        ? message.messageId
+        : message.parentMessageId;
     const targetResponseMessageId =
       message.isCreatedByUser === true ? undefined : message.messageId;
-    const parentMessage = messages?.find((element) => element.messageId == parentMessageId);
+    const parentMessage = messages?.find(
+      (element) => element.messageId == parentMessageId,
+    );
 
     if (parentMessage && parentMessage.isCreatedByUser) {
       ask(
@@ -683,7 +966,7 @@ export default function useChatFunctions({
       );
     } else {
       console.error(
-        'Failed to regenerate the message: parentMessage not found or not created by user.',
+        "Failed to regenerate the message: parentMessage not found or not created by user.",
       );
     }
   };

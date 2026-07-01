@@ -1,6 +1,10 @@
-import { useEffect } from 'react';
-import { createSearchParams } from 'react-router-dom';
-import { LocalStorageKeys, isEphemeralAgentId, Constants } from 'librechat-data-provider';
+import { useEffect } from "react";
+import { createSearchParams } from "react-router-dom";
+import {
+  LocalStorageKeys,
+  isEphemeralAgentId,
+  Constants,
+} from "librechat-data-provider";
 import {
   atom,
   selector,
@@ -10,22 +14,23 @@ import {
   useRecoilValue,
   useSetRecoilState,
   useRecoilCallback,
-} from 'recoil';
+} from "recoil";
 import type {
   EModelEndpoint,
   TCodeContext,
   TConversation,
   TSubmission,
   TPreset,
-} from 'librechat-data-provider';
-import type { TOptionSettings, ExtendedFile } from '~/common';
+} from "librechat-data-provider";
+import type { AtomEffect } from "recoil";
+import type { TOptionSettings, ExtendedFile } from "~/common";
 import {
   clearModelForNonEphemeralAgent,
   createChatSearchParams,
   storeEndpointSettings,
   logger,
-} from '~/utils';
-import { useSetConvoContext } from '~/Providers/SetConvoContext';
+} from "~/utils";
+import { useSetConvoContext } from "~/Providers/SetConvoContext";
 
 export type CoworkCodeHandoff = {
   id: string;
@@ -46,15 +51,12 @@ export type CoworkCodeHandoff = {
   summary: string;
 };
 
-export type WorkspaceSourceType = 'text' | 'markdown';
+export type WorkspaceSourceType = "text" | "markdown";
 export type WorkspaceSourceStatus =
-  | 'ready'
-  | 'too_large'
-  | 'blocked'
-  | 'unsupported'
-  | 'parse_error';
+  "ready" | "too_large" | "blocked" | "unsupported" | "parse_error";
 
-export type WorkspaceSourceChunkKind = 'heading' | 'paragraph' | 'table' | 'text';
+export type WorkspaceSourceChunkKind =
+  "heading" | "paragraph" | "table" | "text";
 
 export type WorkspaceSourceChunk = {
   id: string;
@@ -69,6 +71,26 @@ export type WorkspaceSourceChunk = {
   tokenEstimate: number;
 };
 
+export type WorkspaceSourceEvidence = {
+  sourceId: string;
+  sourceTitle: string;
+  chunkId: string;
+  chunkIndex: number;
+  chunkHeading?: string;
+  chunkKind: WorkspaceSourceChunkKind;
+  tokenEstimate?: number;
+  score?: number;
+  snippet: string;
+  wasFallback?: boolean;
+};
+
+export type WorkspaceSourceContextStats = {
+  chunkCount: number;
+  sourceCount: number;
+  truncated: boolean;
+  fallback: boolean;
+};
+
 export type WorkspaceNotebookSource = {
   id: string;
   title: string;
@@ -79,7 +101,7 @@ export type WorkspaceNotebookSource = {
   enabled: boolean;
   baseStatus: WorkspaceSourceStatus;
   addedAt: string;
-  origin?: 'note';
+  origin?: "note";
 };
 
 export type WorkspaceNotebookNote = {
@@ -90,53 +112,404 @@ export type WorkspaceNotebookNote = {
 
 export type WorkspaceSourceChatMessage = {
   id: string;
-  role: 'user' | 'assistant';
+  role: "user" | "assistant";
   content: string;
   createdAt: string;
   sourceTitles?: string[];
   contextSummary?: string;
+  contextStats?: WorkspaceSourceContextStats;
+  evidence?: WorkspaceSourceEvidence[];
   warning?: string;
   error?: boolean;
 };
 
+type WorkspaceNotebookStoragePayload = {
+  version: 1;
+  updatedAt: string;
+  sources?: WorkspaceNotebookSource[];
+  selectedSourceId?: string | null;
+  notes?: WorkspaceNotebookNote[];
+  noteDraft?: string;
+};
+
+const workspaceNotebookStoragePrefix = "workspaceNotebook:v1:";
+
+const workspaceSourceTypes = new Set<WorkspaceSourceType>(["text", "markdown"]);
+const workspaceSourceStatuses = new Set<WorkspaceSourceStatus>([
+  "ready",
+  "too_large",
+  "blocked",
+  "unsupported",
+  "parse_error",
+]);
+const workspaceSourceChunkKinds = new Set<WorkspaceSourceChunkKind>([
+  "heading",
+  "paragraph",
+  "table",
+  "text",
+]);
+
+const isPlainRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const getNotebookStorageKey = (conversationId: string) =>
+  `${workspaceNotebookStoragePrefix}${conversationId}`;
+
+const getStorage = () => {
+  if (typeof window === "undefined" || !window.localStorage) {
+    return null;
+  }
+  return window.localStorage;
+};
+
+const getStringField = (record: Record<string, unknown>, field: string) =>
+  typeof record[field] === "string" ? record[field] : null;
+
+const sanitizeNotebookChunk = (
+  value: unknown,
+): WorkspaceSourceChunk | null => {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+
+  const id = getStringField(value, "id");
+  const sourceId = getStringField(value, "sourceId");
+  const content = getStringField(value, "content");
+  const kind = value.kind;
+  const index = value.index;
+  const startOffset = value.startOffset;
+  const endOffset = value.endOffset;
+  const sizeBytes = value.sizeBytes;
+  const tokenEstimate = value.tokenEstimate;
+
+  if (
+    !id ||
+    !sourceId ||
+    content == null ||
+    typeof kind !== "string" ||
+    !workspaceSourceChunkKinds.has(kind as WorkspaceSourceChunkKind) ||
+    typeof index !== "number" ||
+    typeof startOffset !== "number" ||
+    typeof endOffset !== "number" ||
+    typeof sizeBytes !== "number" ||
+    typeof tokenEstimate !== "number"
+  ) {
+    return null;
+  }
+
+  const heading = getStringField(value, "heading") ?? undefined;
+  return {
+    id,
+    sourceId,
+    index,
+    heading,
+    content,
+    kind: kind as WorkspaceSourceChunkKind,
+    startOffset,
+    endOffset,
+    sizeBytes,
+    tokenEstimate,
+  };
+};
+
+const sanitizeNotebookSource = (
+  value: unknown,
+): WorkspaceNotebookSource | null => {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+
+  const id = getStringField(value, "id");
+  const title = getStringField(value, "title");
+  const addedAt = getStringField(value, "addedAt");
+  const type = value.type;
+  const baseStatus = value.baseStatus;
+  const sizeBytes = value.sizeBytes;
+
+  if (
+    !id ||
+    !title ||
+    !addedAt ||
+    typeof type !== "string" ||
+    !workspaceSourceTypes.has(type as WorkspaceSourceType) ||
+    typeof baseStatus !== "string" ||
+    !workspaceSourceStatuses.has(baseStatus as WorkspaceSourceStatus) ||
+    typeof sizeBytes !== "number"
+  ) {
+    return null;
+  }
+
+  const sourceStatus = baseStatus as WorkspaceSourceStatus;
+  const content =
+    sourceStatus === "ready" ? getStringField(value, "content") ?? "" : "";
+  const chunks =
+    sourceStatus === "ready" && Array.isArray(value.chunks)
+      ? value.chunks
+          .map((chunk) => sanitizeNotebookChunk(chunk))
+          .filter((chunk): chunk is WorkspaceSourceChunk => chunk != null)
+      : [];
+  const origin = value.origin === "note" ? "note" : undefined;
+
+  return {
+    id,
+    title,
+    type: type as WorkspaceSourceType,
+    content,
+    sizeBytes,
+    chunks,
+    enabled: sourceStatus === "ready" && value.enabled === true,
+    baseStatus: sourceStatus,
+    addedAt,
+    origin,
+  };
+};
+
+const sanitizeNotebookNote = (value: unknown): WorkspaceNotebookNote | null => {
+  if (!isPlainRecord(value)) {
+    return null;
+  }
+
+  const id = getStringField(value, "id");
+  const content = getStringField(value, "content");
+  const addedAt = getStringField(value, "addedAt");
+
+  if (!id || content == null || !addedAt) {
+    return null;
+  }
+
+  return { id, content, addedAt };
+};
+
+const sanitizeNotebookPayload = (
+  value: unknown,
+): WorkspaceNotebookStoragePayload | null => {
+  if (!isPlainRecord(value) || value.version !== 1) {
+    return null;
+  }
+
+  const updatedAt = getStringField(value, "updatedAt");
+  if (!updatedAt) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    updatedAt,
+    sources: Array.isArray(value.sources)
+      ? value.sources
+          .map((source) => sanitizeNotebookSource(source))
+          .filter(
+            (source): source is WorkspaceNotebookSource => source != null,
+          )
+      : undefined,
+    selectedSourceId:
+      typeof value.selectedSourceId === "string" ||
+      value.selectedSourceId === null
+        ? value.selectedSourceId
+        : undefined,
+    notes: Array.isArray(value.notes)
+      ? value.notes
+          .map((note) => sanitizeNotebookNote(note))
+          .filter((note): note is WorkspaceNotebookNote => note != null)
+      : undefined,
+    noteDraft: typeof value.noteDraft === "string" ? value.noteDraft : undefined,
+  };
+};
+
+const readNotebookPayload = (
+  conversationId: string,
+): WorkspaceNotebookStoragePayload | null => {
+  const storage = getStorage();
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    const raw = storage.getItem(getNotebookStorageKey(conversationId));
+    return raw ? sanitizeNotebookPayload(JSON.parse(raw)) : null;
+  } catch {
+    return null;
+  }
+};
+
+const isNotebookPayloadEmpty = (payload: WorkspaceNotebookStoragePayload) =>
+  (payload.sources?.length ?? 0) === 0 &&
+  payload.selectedSourceId == null &&
+  (payload.notes?.length ?? 0) === 0 &&
+  !payload.noteDraft?.trim();
+
+const writeNotebookPayload = (
+  conversationId: string,
+  payload: WorkspaceNotebookStoragePayload,
+) => {
+  const storage = getStorage();
+  if (!storage) {
+    return;
+  }
+
+  try {
+    const key = getNotebookStorageKey(conversationId);
+    if (isNotebookPayloadEmpty(payload)) {
+      storage.removeItem(key);
+      return;
+    }
+    storage.setItem(key, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota/availability errors; Notebook still works in memory.
+  }
+};
+
+const updateNotebookPayload = (
+  conversationId: string,
+  update: (
+    payload: WorkspaceNotebookStoragePayload,
+  ) => WorkspaceNotebookStoragePayload,
+) => {
+  const current = readNotebookPayload(conversationId) ?? {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+  };
+  writeNotebookPayload(conversationId, {
+    ...update(current),
+    version: 1,
+    updatedAt: new Date().toISOString(),
+  });
+};
+
+const notebookSourcesPersistenceEffect = (
+  conversationId: string,
+): AtomEffect<WorkspaceNotebookSource[]> => {
+  return ({ setSelf, onSet }) => {
+    const storedSources = readNotebookPayload(conversationId)?.sources;
+    if (storedSources && storedSources.length > 0) {
+      setSelf(storedSources);
+    }
+
+    onSet((newValue) => {
+      updateNotebookPayload(conversationId, (payload) => ({
+        ...payload,
+        sources:
+          newValue instanceof DefaultValue
+            ? []
+            : newValue
+                .map((source) => sanitizeNotebookSource(source))
+                .filter(
+                  (source): source is WorkspaceNotebookSource =>
+                    source != null,
+                ),
+      }));
+    });
+  };
+};
+
+const notebookSelectedSourcePersistenceEffect = (
+  conversationId: string,
+): AtomEffect<string | null> => {
+  return ({ setSelf, onSet }) => {
+    const storedSelectedSourceId =
+      readNotebookPayload(conversationId)?.selectedSourceId;
+    if (storedSelectedSourceId !== undefined) {
+      setSelf(storedSelectedSourceId);
+    }
+
+    onSet((newValue) => {
+      updateNotebookPayload(conversationId, (payload) => ({
+        ...payload,
+        selectedSourceId: newValue instanceof DefaultValue ? null : newValue,
+      }));
+    });
+  };
+};
+
+const notebookNotesPersistenceEffect = (
+  conversationId: string,
+): AtomEffect<WorkspaceNotebookNote[]> => {
+  return ({ setSelf, onSet }) => {
+    const storedNotes = readNotebookPayload(conversationId)?.notes;
+    if (storedNotes && storedNotes.length > 0) {
+      setSelf(storedNotes);
+    }
+
+    onSet((newValue) => {
+      updateNotebookPayload(conversationId, (payload) => ({
+        ...payload,
+        notes:
+          newValue instanceof DefaultValue
+            ? []
+            : newValue
+                .map((note) => sanitizeNotebookNote(note))
+                .filter((note): note is WorkspaceNotebookNote => note != null),
+      }));
+    });
+  };
+};
+
+const notebookNoteDraftPersistenceEffect = (
+  conversationId: string,
+): AtomEffect<string> => {
+  return ({ setSelf, onSet }) => {
+    const storedNoteDraft = readNotebookPayload(conversationId)?.noteDraft;
+    if (storedNoteDraft) {
+      setSelf(storedNoteDraft);
+    }
+
+    onSet((newValue) => {
+      updateNotebookPayload(conversationId, (payload) => ({
+        ...payload,
+        noteDraft: newValue instanceof DefaultValue ? "" : newValue,
+      }));
+    });
+  };
+};
+
 const submissionKeysAtom = atom<(string | number)[]>({
-  key: 'submissionKeys',
+  key: "submissionKeys",
   default: [],
 });
 
 const submissionByIndex = atomFamily<TSubmission | null, string | number>({
-  key: 'submissionByIndex',
+  key: "submissionByIndex",
   default: null,
 });
 
 const submissionKeysSelector = selector<(string | number)[]>({
-  key: 'submissionKeysSelector',
+  key: "submissionKeysSelector",
   get: ({ get }) => {
     const keys = get(conversationKeysAtom);
     return keys.filter((key) => get(submissionByIndex(key)) !== null);
   },
   set: ({ set }, newKeys) => {
-    logger.log('setting submissionKeysAtom', newKeys);
+    logger.log("setting submissionKeysAtom", newKeys);
     set(submissionKeysAtom, newKeys);
   },
 });
 
 const conversationByIndex = atomFamily<TConversation | null, string | number>({
-  key: 'conversationByIndex',
+  key: "conversationByIndex",
   default: null,
   effects: [
     ({ onSet, node }) => {
       onSet(async (newValue, oldValue) => {
-        const index = Number(node.key.split('__')[1]);
-        logger.log('conversation', 'Setting conversation:', { index, newValue, oldValue });
+        const index = Number(node.key.split("__")[1]);
+        logger.log("conversation", "Setting conversation:", {
+          index,
+          newValue,
+          oldValue,
+        });
         if (newValue?.assistant_id != null && newValue.assistant_id) {
           localStorage.setItem(
             `${LocalStorageKeys.ASST_ID_PREFIX}${index}${newValue.endpoint}`,
             newValue.assistant_id,
           );
         }
-        if (newValue?.agent_id != null && !isEphemeralAgentId(newValue.agent_id)) {
-          localStorage.setItem(`${LocalStorageKeys.AGENT_ID_PREFIX}${index}`, newValue.agent_id);
+        if (
+          newValue?.agent_id != null &&
+          !isEphemeralAgentId(newValue.agent_id)
+        ) {
+          localStorage.setItem(
+            `${LocalStorageKeys.AGENT_ID_PREFIX}${index}`,
+            newValue.agent_id,
+          );
         }
         if (newValue?.spec != null && newValue.spec) {
           localStorage.setItem(LocalStorageKeys.LAST_SPEC, newValue.spec);
@@ -165,18 +538,18 @@ const conversationByIndex = atomFamily<TConversation | null, string | number>({
         const shouldUpdateParams =
           index === 0 &&
           !disableParams &&
-          newValue.createdAt === '' &&
+          newValue.createdAt === "" &&
           JSON.stringify(newValue) !== JSON.stringify(oldValue) &&
           (oldValue as TConversation)?.conversationId === Constants.NEW_CONVO;
 
         if (shouldUpdateParams) {
           const newParams = createChatSearchParams(newValue);
           if (newValue.chatProjectId) {
-            newParams.set('projectId', newValue.chatProjectId);
+            newParams.set("projectId", newValue.chatProjectId);
           }
           const searchParams = createSearchParams(newParams);
           const url = `${window.location.pathname}?${searchParams.toString()}`;
-          window.history.pushState({}, '', url);
+          window.history.pushState({}, "", url);
         }
       });
     },
@@ -184,33 +557,38 @@ const conversationByIndex = atomFamily<TConversation | null, string | number>({
 });
 
 const filesByIndex = atomFamily<Map<string, ExtendedFile>, string | number>({
-  key: 'filesByIndex',
+  key: "filesByIndex",
   default: new Map(),
 });
 
 const conversationKeysAtom = atom<(string | number)[]>({
-  key: 'conversationKeys',
+  key: "conversationKeys",
   default: [],
 });
 
 const allConversationsSelector = selector({
-  key: 'allConversationsSelector',
+  key: "allConversationsSelector",
   get: ({ get }) => {
     const keys = get(conversationKeysAtom);
-    return keys.map((key) => get(conversationByIndex(key))).map((convo) => convo?.conversationId);
+    return keys
+      .map((key) => get(conversationByIndex(key)))
+      .map((convo) => convo?.conversationId);
   },
 });
 
 const conversationIdByIndex = selectorFamily<string | null, string | number>({
-  key: 'conversationIdByIndex',
+  key: "conversationIdByIndex",
   get:
     (index: string | number) =>
     ({ get }) =>
       get(conversationByIndex(index))?.conversationId ?? null,
 });
 
-const conversationEndpointByIndex = selectorFamily<EModelEndpoint | null, string | number>({
-  key: 'conversationEndpointByIndex',
+const conversationEndpointByIndex = selectorFamily<
+  EModelEndpoint | null,
+  string | number
+>({
+  key: "conversationEndpointByIndex",
   get:
     (index: string | number) =>
     ({ get }) =>
@@ -218,8 +596,11 @@ const conversationEndpointByIndex = selectorFamily<EModelEndpoint | null, string
 });
 
 /** Returns `endpointType ?? endpoint`, matching the effective endpoint used for feature gating. */
-const effectiveEndpointByIndex = selectorFamily<EModelEndpoint | null, string | number>({
-  key: 'effectiveEndpointByIndex',
+const effectiveEndpointByIndex = selectorFamily<
+  EModelEndpoint | null,
+  string | number
+>({
+  key: "effectiveEndpointByIndex",
   get:
     (index: string | number) =>
     ({ get }) => {
@@ -228,32 +609,40 @@ const effectiveEndpointByIndex = selectorFamily<EModelEndpoint | null, string | 
     },
 });
 
-const conversationModelByIndex = selectorFamily<string | null, string | number>({
-  key: 'conversationModelByIndex',
-  get:
-    (index: string | number) =>
-    ({ get }) =>
-      get(conversationByIndex(index))?.model ?? null,
-});
+const conversationModelByIndex = selectorFamily<string | null, string | number>(
+  {
+    key: "conversationModelByIndex",
+    get:
+      (index: string | number) =>
+      ({ get }) =>
+        get(conversationByIndex(index))?.model ?? null,
+  },
+);
 
 const conversationSpecByIndex = selectorFamily<string | null, string | number>({
-  key: 'conversationSpecByIndex',
+  key: "conversationSpecByIndex",
   get:
     (index: string | number) =>
     ({ get }) =>
       get(conversationByIndex(index))?.spec ?? null,
 });
 
-const conversationAgentIdByIndex = selectorFamily<string | null, string | number>({
-  key: 'conversationAgentIdByIndex',
+const conversationAgentIdByIndex = selectorFamily<
+  string | null,
+  string | number
+>({
+  key: "conversationAgentIdByIndex",
   get:
     (index: string | number) =>
     ({ get }) =>
       get(conversationByIndex(index))?.agent_id ?? null,
 });
 
-const conversationAssistantIdByIndex = selectorFamily<string | null, string | number>({
-  key: 'conversationAssistantIdByIndex',
+const conversationAssistantIdByIndex = selectorFamily<
+  string | null,
+  string | number
+>({
+  key: "conversationAssistantIdByIndex",
   get:
     (index: string | number) =>
     ({ get }) =>
@@ -261,54 +650,62 @@ const conversationAssistantIdByIndex = selectorFamily<string | null, string | nu
 });
 
 const presetByIndex = atomFamily<TPreset | null, string | number>({
-  key: 'presetByIndex',
+  key: "presetByIndex",
   default: null,
 });
 
 const textByIndex = atomFamily<string, string | number>({
-  key: 'textByIndex',
-  default: '',
+  key: "textByIndex",
+  default: "",
 });
 
 const showStopButtonByIndex = atomFamily<boolean, string | number>({
-  key: 'showStopButtonByIndex',
+  key: "showStopButtonByIndex",
   default: false,
 });
 
 const abortScrollFamily = atomFamily<boolean, string | number>({
-  key: 'abortScrollByIndex',
+  key: "abortScrollByIndex",
   default: false,
   effects: [
     ({ onSet, node }) => {
       onSet(async (newValue) => {
         const key = Number(node.key.split(Constants.COMMON_DIVIDER)[1]);
-        logger.log('message_scrolling', 'Recoil Effect: Setting abortScrollByIndex', {
-          key,
-          newValue,
-        });
+        logger.log(
+          "message_scrolling",
+          "Recoil Effect: Setting abortScrollByIndex",
+          {
+            key,
+            newValue,
+          },
+        );
       });
     },
   ] as const,
 });
 
 const isSubmittingFamily = atomFamily({
-  key: 'isSubmittingByIndex',
+  key: "isSubmittingByIndex",
   default: false,
   effects: [
     ({ onSet, node }) => {
       onSet(async (newValue) => {
         const key = Number(node.key.split(Constants.COMMON_DIVIDER)[1]);
-        logger.log('message_stream', 'Recoil Effect: Setting isSubmittingByIndex', {
-          key,
-          newValue,
-        });
+        logger.log(
+          "message_stream",
+          "Recoil Effect: Setting isSubmittingByIndex",
+          {
+            key,
+            newValue,
+          },
+        );
       });
     },
   ],
 });
 
 const anySubmittingSelector = selector<boolean>({
-  key: 'anySubmittingSelector',
+  key: "anySubmittingSelector",
   get: ({ get }) => {
     const keys = get(conversationKeysAtom);
     return keys.some((key) => get(isSubmittingFamily(key)) === true);
@@ -316,37 +713,40 @@ const anySubmittingSelector = selector<boolean>({
 });
 
 const optionSettingsFamily = atomFamily<TOptionSettings, string | number>({
-  key: 'optionSettingsByIndex',
+  key: "optionSettingsByIndex",
   default: {},
 });
 
 const showPopoverFamily = atomFamily({
-  key: 'showPopoverByIndex',
+  key: "showPopoverByIndex",
   default: false,
 });
 
-const activePromptByIndex = atomFamily<string | undefined, string | number | null>({
-  key: 'activePromptByIndex',
+const activePromptByIndex = atomFamily<
+  string | undefined,
+  string | number | null
+>({
+  key: "activePromptByIndex",
   default: undefined,
 });
 
 const showMentionPopoverFamily = atomFamily<boolean, string | number | null>({
-  key: 'showMentionPopoverByIndex',
+  key: "showMentionPopoverByIndex",
   default: false,
 });
 
 const showPlusPopoverFamily = atomFamily<boolean, string | number | null>({
-  key: 'showPlusPopoverByIndex',
+  key: "showPlusPopoverByIndex",
   default: false,
 });
 
 const showPromptsPopoverFamily = atomFamily<boolean, string | number | null>({
-  key: 'showPromptsPopoverByIndex',
+  key: "showPromptsPopoverByIndex",
   default: false,
 });
 
 const showSkillsPopoverFamily = atomFamily<boolean, string | number | null>({
-  key: 'showSkillsPopoverByIndex',
+  key: "showSkillsPopoverByIndex",
   default: false,
 });
 
@@ -360,7 +760,7 @@ const showSkillsPopoverFamily = atomFamily<boolean, string | number | null>({
  * current selection before hitting send.
  */
 const pendingManualSkillsByConvoId = atomFamily<string[], string>({
-  key: 'pendingManualSkillsByConvoId',
+  key: "pendingManualSkillsByConvoId",
   default: [],
 });
 
@@ -374,7 +774,7 @@ const pendingManualSkillsByConvoId = atomFamily<string[], string>({
  * before sending.
  */
 const pendingQuotesByConvoId = atomFamily<string[], string>({
-  key: 'pendingQuotesByConvoId',
+  key: "pendingQuotesByConvoId",
   default: [],
 });
 
@@ -385,79 +785,112 @@ const pendingQuotesByConvoId = atomFamily<string[], string>({
  * model-facing prompt without filling the visible textarea.
  */
 const pendingCodeContextByConvoId = atomFamily<TCodeContext | null, string>({
-  key: 'pendingCodeContextByConvoId',
+  key: "pendingCodeContextByConvoId",
   default: null,
 });
 
-const pendingWorkspacePatchByIndex = atomFamily<string | null, string | number | null>({
-  key: 'pendingWorkspacePatchByIndex',
+const pendingWorkspacePatchByIndex = atomFamily<
+  string | null,
+  string | number | null
+>({
+  key: "pendingWorkspacePatchByIndex",
   default: null,
 });
 
-const coworkCodeHandoffByIndex = atomFamily<CoworkCodeHandoff | null, string | number | null>({
-  key: 'coworkCodeHandoffByIndex',
+const coworkCodeHandoffByIndex = atomFamily<
+  CoworkCodeHandoff | null,
+  string | number | null
+>({
+  key: "coworkCodeHandoffByIndex",
   default: null,
 });
 
-const workspaceSourcesByConversationId = atomFamily<WorkspaceNotebookSource[], string>({
-  key: 'workspaceSourcesByConversationId',
+const workspaceSourcesByConversationId = atomFamily<
+  WorkspaceNotebookSource[],
+  string
+>({
+  key: "workspaceSourcesByConversationId",
   default: [],
+  effects: (conversationId) => [
+    notebookSourcesPersistenceEffect(conversationId),
+  ],
 });
 
-const workspaceSelectedSourceIdByConversationId = atomFamily<string | null, string>({
-  key: 'workspaceSelectedSourceIdByConversationId',
+const workspaceSelectedSourceIdByConversationId = atomFamily<
+  string | null,
+  string
+>({
+  key: "workspaceSelectedSourceIdByConversationId",
   default: null,
+  effects: (conversationId) => [
+    notebookSelectedSourcePersistenceEffect(conversationId),
+  ],
 });
 
-const workspaceNotesByConversationId = atomFamily<WorkspaceNotebookNote[], string>({
-  key: 'workspaceNotesByConversationId',
+const workspaceNotesByConversationId = atomFamily<
+  WorkspaceNotebookNote[],
+  string
+>({
+  key: "workspaceNotesByConversationId",
   default: [],
+  effects: (conversationId) => [notebookNotesPersistenceEffect(conversationId)],
 });
 
 const workspaceNoteDraftByConversationId = atomFamily<string, string>({
-  key: 'workspaceNoteDraftByConversationId',
-  default: '',
+  key: "workspaceNoteDraftByConversationId",
+  default: "",
+  effects: (conversationId) => [
+    notebookNoteDraftPersistenceEffect(conversationId),
+  ],
 });
 
-const workspaceSourceChatMessagesByConversationId = atomFamily<WorkspaceSourceChatMessage[], string>(
+const workspaceSourceChatMessagesByConversationId = atomFamily<
+  WorkspaceSourceChatMessage[],
+  string
+>({
+  key: "workspaceSourceChatMessagesByConversationId",
+  default: [],
+});
+
+const workspaceSourceChatDraftByConversationId = atomFamily<string, string>({
+  key: "workspaceSourceChatDraftByConversationId",
+  default: "",
+});
+
+const workspaceUseNotebookSourcesByConversationId = atomFamily<boolean, string>(
   {
-    key: 'workspaceSourceChatMessagesByConversationId',
-    default: [],
+    key: "workspaceUseNotebookSourcesByConversationId",
+    default: false,
   },
 );
 
-const workspaceSourceChatDraftByConversationId = atomFamily<string, string>({
-  key: 'workspaceSourceChatDraftByConversationId',
-  default: '',
-});
-
 const globalAudioURLFamily = atomFamily<string | null, string | number | null>({
-  key: 'globalAudioURLByIndex',
+  key: "globalAudioURLByIndex",
   default: null,
 });
 
 const globalAudioFetchingFamily = atomFamily<boolean, string | number | null>({
-  key: 'globalAudioisFetchingByIndex',
+  key: "globalAudioisFetchingByIndex",
   default: false,
 });
 
 const globalAudioPlayingFamily = atomFamily<boolean, string | number | null>({
-  key: 'globalAudioisPlayingByIndex',
+  key: "globalAudioisPlayingByIndex",
   default: false,
 });
 
 const activeRunFamily = atomFamily<string | null, string | number | null>({
-  key: 'activeRunByIndex',
+  key: "activeRunByIndex",
   default: null,
 });
 
 const audioRunFamily = atomFamily<string | null, string | number | null>({
-  key: 'audioRunByIndex',
+  key: "audioRunByIndex",
   default: null,
 });
 
 const messagesSiblingIdxFamily = atomFamily<number, string | null | undefined>({
-  key: 'messagesSiblingIdx',
+  key: "messagesSiblingIdx",
   default: 0,
 });
 
@@ -489,7 +922,8 @@ function useClearConvoState() {
   const clearAllConversations = useRecoilCallback(
     ({ reset, snapshot }) =>
       async (skipFirst?: boolean) => {
-        const conversationKeys = await snapshot.getPromise(conversationKeysAtom);
+        const conversationKeys =
+          await snapshot.getPromise(conversationKeysAtom);
 
         for (const conversationKey of conversationKeys) {
           if (skipFirst === true && conversationKey == 0) {
@@ -513,15 +947,17 @@ function useClearSubmissionState() {
   const clearAllSubmissions = useRecoilCallback(
     ({ reset, set, snapshot }) =>
       async (skipFirst?: boolean) => {
-        const submissionKeys = await snapshot.getPromise(submissionKeysSelector);
-        logger.log('submissionKeys', submissionKeys);
+        const submissionKeys = await snapshot.getPromise(
+          submissionKeysSelector,
+        );
+        logger.log("submissionKeys", submissionKeys);
 
         for (const key of submissionKeys) {
           if (skipFirst === true && key == 0) {
             continue;
           }
 
-          logger.log('resetting submission', key);
+          logger.log("resetting submission", key);
           reset(submissionByIndex(key));
         }
 
@@ -534,7 +970,7 @@ function useClearSubmissionState() {
 }
 
 const updateConversationSelector = selectorFamily({
-  key: 'updateConversationSelector',
+  key: "updateConversationSelector",
   get: () => () => null as Partial<TConversation> | null,
   set:
     (conversationId: string) =>
@@ -546,7 +982,10 @@ const updateConversationSelector = selectorFamily({
       const keys = get(conversationKeysAtom);
       keys.forEach((key) => {
         set(conversationByIndex(key), (prevConversation) => {
-          if (prevConversation && prevConversation.conversationId === conversationId) {
+          if (
+            prevConversation &&
+            prevConversation.conversationId === conversationId
+          ) {
             return {
               ...prevConversation,
               ...newPartialConversation,
@@ -606,5 +1045,6 @@ export default {
   workspaceNoteDraftByConversationId,
   workspaceSourceChatMessagesByConversationId,
   workspaceSourceChatDraftByConversationId,
+  workspaceUseNotebookSourcesByConversationId,
   updateConversationSelector,
 };

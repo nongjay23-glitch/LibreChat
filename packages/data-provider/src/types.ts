@@ -1,4 +1,4 @@
-import type { InfiniteData } from '@tanstack/react-query';
+import type { InfiniteData } from "@tanstack/react-query";
 import type {
   TConversationTag,
   EModelEndpoint,
@@ -9,14 +9,14 @@ import type {
   TBanner,
   ReasoningResponseKey,
   ReasoningParameterFormat,
-} from './schemas';
-import type { RefillIntervalUnit } from './balance';
-import type { SettingDefinition } from './generate';
-import type { TMinimalFeedback } from './feedback';
-import type { ContentTypes } from './types/runs';
-import type { Agent } from './types/assistants';
+} from "./schemas";
+import type { RefillIntervalUnit } from "./balance";
+import type { SettingDefinition } from "./generate";
+import type { TMinimalFeedback } from "./feedback";
+import type { ContentTypes } from "./types/runs";
+import type { Agent } from "./types/assistants";
 
-export * from './schemas';
+export * from "./schemas";
 
 export type TMessages = TMessage[];
 
@@ -24,59 +24,59 @@ export type TMessages = TMessage[];
 export type TEndpointOption = Pick<
   TConversation,
   // Core conversation fields
-  | 'endpoint'
-  | 'endpointType'
-  | 'model'
-  | 'modelLabel'
-  | 'chatGptLabel'
-  | 'promptPrefix'
-  | 'temperature'
-  | 'topP'
-  | 'topK'
-  | 'top_p'
-  | 'frequency_penalty'
-  | 'presence_penalty'
-  | 'maxOutputTokens'
-  | 'maxContextTokens'
-  | 'max_tokens'
-  | 'maxTokens'
-  | 'resendFiles'
-  | 'imageDetail'
-  | 'reasoning_effort'
-  | 'verbosity'
-  | 'instructions'
-  | 'additional_instructions'
-  | 'append_current_datetime'
-  | 'tools'
-  | 'stop'
-  | 'region'
-  | 'additionalModelRequestFields'
+  | "endpoint"
+  | "endpointType"
+  | "model"
+  | "modelLabel"
+  | "chatGptLabel"
+  | "promptPrefix"
+  | "temperature"
+  | "topP"
+  | "topK"
+  | "top_p"
+  | "frequency_penalty"
+  | "presence_penalty"
+  | "maxOutputTokens"
+  | "maxContextTokens"
+  | "max_tokens"
+  | "maxTokens"
+  | "resendFiles"
+  | "imageDetail"
+  | "reasoning_effort"
+  | "verbosity"
+  | "instructions"
+  | "additional_instructions"
+  | "append_current_datetime"
+  | "tools"
+  | "stop"
+  | "region"
+  | "additionalModelRequestFields"
   // Anthropic-specific
-  | 'promptCache'
-  | 'promptCacheTtl'
-  | 'thinking'
-  | 'thinkingBudget'
-  | 'thinkingLevel'
-  | 'effort'
-  | 'thinkingDisplay'
+  | "promptCache"
+  | "promptCacheTtl"
+  | "thinking"
+  | "thinkingBudget"
+  | "thinkingLevel"
+  | "effort"
+  | "thinkingDisplay"
   // Assistant/Agent fields
-  | 'assistant_id'
-  | 'agent_id'
+  | "assistant_id"
+  | "agent_id"
   // UI/Display fields
-  | 'iconURL'
-  | 'greeting'
-  | 'spec'
+  | "iconURL"
+  | "greeting"
+  | "spec"
   // Artifacts
-  | 'artifacts'
+  | "artifacts"
   // Files
-  | 'file_ids'
+  | "file_ids"
   // System field
-  | 'system'
-  | 'chatProjectId'
+  | "system"
+  | "chatProjectId"
   // Google examples
-  | 'examples'
+  | "examples"
   // Context
-  | 'context'
+  | "context"
 > & {
   // Fields specific to endpoint options that don't exist on TConversation
   modelDisplayLabel?: string;
@@ -124,6 +124,20 @@ export type TCodeContext = {
   files: TCodeContextFile[];
 };
 
+export type TNotebookContext = {
+  id: string;
+  title: string;
+  createdAt: number;
+  status?: "sources" | "no_enabled_sources";
+  mode?: "auto" | "force";
+  totalBytes: number;
+  sourceCount: number;
+  chunkCount: number;
+  fallback: boolean;
+  truncated: boolean;
+  content: string;
+};
+
 export type TPayload = Partial<TMessage> &
   Partial<TEndpointOption> & {
     isContinued: boolean;
@@ -144,6 +158,8 @@ export type TPayload = Partial<TMessage> &
     manualSkills?: string[];
     /** Read-only project files attached from the local Code workspace for this turn. */
     codeContext?: TCodeContext;
+    /** Selected Notebook/Sources chunks attached as hidden reference context for this turn. */
+    notebookContext?: TNotebookContext;
     /** Browser IANA timezone (e.g. `America/New_York`) used to resolve local-time prompt variables server-side. */
     timezone?: string;
   };
@@ -181,13 +197,17 @@ export type TSubmission = {
   manualSkills?: string[];
   /** Read-only project files attached from the local Code workspace for this turn. */
   codeContext?: TCodeContext;
+  /** Selected Notebook/Sources chunks attached as hidden reference context for this turn. */
+  notebookContext?: TNotebookContext;
 };
 
-export type EventSubmission = Omit<TSubmission, 'initialResponse'> & { initialResponse: TMessage };
+export type EventSubmission = Omit<TSubmission, "initialResponse"> & {
+  initialResponse: TMessage;
+};
 
 export type TPluginAction = {
   pluginKey: string;
-  action: 'install' | 'uninstall';
+  action: "install" | "uninstall";
   auth?: Partial<Record<string, string>> | null;
   isEntityTool?: boolean;
 };
@@ -378,21 +398,24 @@ export type TPinConversationRequest = {
 
 export type TPinConversationResponse = TConversation;
 
-export type TSharedMessagesResponse = Omit<TSharedLink, 'messages'> & {
+export type TSharedMessagesResponse = Omit<TSharedLink, "messages"> & {
   messages: TMessage[];
 };
 
-export type TCreateShareLinkRequest = Pick<TConversation, 'conversationId'>;
+export type TCreateShareLinkRequest = Pick<TConversation, "conversationId">;
 
-export type TUpdateShareLinkRequest = Pick<TSharedLink, 'shareId' | 'targetMessageId'>;
+export type TUpdateShareLinkRequest = Pick<
+  TSharedLink,
+  "shareId" | "targetMessageId"
+>;
 
-export type TSharedLinkResponse = Pick<TSharedLink, 'shareId'> &
-  Pick<TSharedLink, 'targetMessageId'> &
-  Pick<TConversation, 'conversationId'> & {
+export type TSharedLinkResponse = Pick<TSharedLink, "shareId"> &
+  Pick<TSharedLink, "targetMessageId"> &
+  Pick<TConversation, "conversationId"> & {
     _id?: string;
   };
 
-export type TSharedLinkGetResponse = Omit<TSharedLinkResponse, 'shareId'> & {
+export type TSharedLinkGetResponse = Omit<TSharedLinkResponse, "shareId"> & {
   shareId: string | null;
   success: boolean;
   /** Per-link "share files" choice; absent on legacy links (treated as enabled). */
@@ -403,7 +426,7 @@ export type TSharedLinkGetResponse = Omit<TSharedLinkResponse, 'shareId'> & {
 export type TConversationTagsResponse = TConversationTag[];
 // type for creating conversation tag
 export type TConversationTagRequest = Partial<
-  Omit<TConversationTag, 'createdAt' | 'updatedAt' | 'count' | 'user'>
+  Omit<TConversationTag, "createdAt" | "updatedAt" | "count" | "user">
 > & {
   conversationId?: string;
   addToConversation?: boolean;
@@ -481,8 +504,7 @@ export type TConfig = {
 };
 
 export type TEndpointsConfig =
-  | Record<EModelEndpoint | string, TConfig | null | undefined>
-  | undefined;
+  Record<EModelEndpoint | string, TConfig | null | undefined> | undefined;
 
 export type TModelsConfig = Record<string, string[]>;
 
@@ -600,7 +622,7 @@ export type TVerifyEmail = {
   token: string;
 };
 
-export type TResendVerificationEmail = Omit<TVerifyEmail, 'token'>;
+export type TResendVerificationEmail = Omit<TVerifyEmail, "token">;
 
 export type TRefreshTokenResponse = {
   token: string;
@@ -632,7 +654,7 @@ export type TPrompt = {
   groupId: string;
   author: string;
   prompt: string;
-  type: 'text' | 'chat';
+  type: "text" | "chat";
   createdAt: string;
   updatedAt: string;
   _id?: string;
@@ -645,7 +667,7 @@ export type TPromptGroup = {
   oneliner?: string;
   category?: string;
   productionId?: string | null;
-  productionPrompt?: Pick<TPrompt, 'prompt'> | null;
+  productionPrompt?: Pick<TPrompt, "prompt"> | null;
   author: string;
   authorName: string;
   isPublic?: boolean;
@@ -655,11 +677,17 @@ export type TPromptGroup = {
 };
 
 export type TCreatePrompt = {
-  prompt: Pick<TPrompt, 'prompt' | 'type'> & { groupId?: string };
-  group?: { name: string; category?: string; oneliner?: string; command?: string };
+  prompt: Pick<TPrompt, "prompt" | "type"> & { groupId?: string };
+  group?: {
+    name: string;
+    category?: string;
+    oneliner?: string;
+    command?: string;
+  };
 };
 
-export type TCreatePromptRecord = TCreatePrompt & Pick<TPromptGroup, 'author' | 'authorName'>;
+export type TCreatePromptRecord = TCreatePrompt &
+  Pick<TPromptGroup, "author" | "authorName">;
 
 export type TPromptsWithFilterRequest = {
   groupId: string;
@@ -676,7 +704,7 @@ export type TPromptGroupsWithFilterRequest = {
   cursor?: string; // For cursor-based pagination
   before?: string | null;
   after?: string | null;
-  order?: 'asc' | 'desc';
+  order?: "asc" | "desc";
   name?: string;
   author?: string;
 };
@@ -723,7 +751,7 @@ export type TMakePromptProductionResponse = {
 export type TMakePromptProductionRequest = {
   id: string;
   groupId: string;
-  productionPrompt: Pick<TPrompt, 'prompt'>;
+  productionPrompt: Pick<TPrompt, "prompt">;
 };
 
 export type TUpdatePromptLabelsRequest = {
@@ -797,9 +825,9 @@ export type TBalanceResponse = {
  * backend no longer reads or writes it.
  */
 export enum InvocationMode {
-  auto = 'auto',
-  manual = 'manual',
-  both = 'both',
+  auto = "auto",
+  manual = "manual",
+  both = "both",
 }
 
 /**
@@ -812,7 +840,7 @@ export type TSkillNode = {
   _id: string;
   skillId: string;
   parentId: string | null;
-  type: 'file' | 'folder';
+  type: "file" | "folder";
   name: string;
   fileId?: string;
   order: number;
@@ -826,7 +854,7 @@ export type TSkillTreeResponse = {
 };
 
 export type TCreateSkillNodeRequest = {
-  type: 'file' | 'folder';
+  type: "file" | "folder";
   name: string;
   parentId?: string | null;
   order?: number;

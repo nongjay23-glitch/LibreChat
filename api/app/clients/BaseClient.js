@@ -1,6 +1,6 @@
-const crypto = require('crypto');
-const fetch = require('node-fetch');
-const { logger } = require('@librechat/data-schemas');
+const crypto = require("crypto");
+const fetch = require("node-fetch");
+const { logger } = require("@librechat/data-schemas");
 const {
   countTokens,
   checkBalance,
@@ -12,7 +12,7 @@ const {
   encodeAndFormatAudios,
   encodeAndFormatVideos,
   encodeAndFormatDocuments,
-} = require('@librechat/api');
+} = require("@librechat/api");
 const {
   Constants,
   FileSources,
@@ -27,11 +27,11 @@ const {
   supportsBalanceCheck,
   isBedrockDocumentType,
   getEndpointFileConfig,
-} = require('librechat-data-provider');
-const { getStrategyFunctions } = require('~/server/services/Files/strategies');
-const { logViolation } = require('~/cache');
-const TextStream = require('./TextStream');
-const db = require('~/models');
+} = require("librechat-data-provider");
+const { getStrategyFunctions } = require("~/server/services/Files/strategies");
+const { logViolation } = require("~/cache");
+const TextStream = require("./TextStream");
+const db = require("~/models");
 
 const collectHistoricalFileRefs = (message) => {
   const refs = [];
@@ -78,18 +78,19 @@ const TOOL_ATTACHMENT_KEYS = [
   Tools.memory,
 ];
 const DISPLAY_ATTACHMENT_FIELDS = [
-  'filename',
-  'filepath',
-  'expiresAt',
-  'conversationId',
-  'messageId',
-  'toolCallId',
-  'name',
+  "filename",
+  "filepath",
+  "expiresAt",
+  "conversationId",
+  "messageId",
+  "toolCallId",
+  "name",
 ];
-const PER_MESSAGE_FILE_ATTACHMENT_FIELDS = ['messageId', 'toolCallId'];
+const PER_MESSAGE_FILE_ATTACHMENT_FIELDS = ["messageId", "toolCallId"];
 const CODE_CONTEXT_MAX_FILES = 20;
 const CODE_CONTEXT_MAX_CHARS = 160 * 1024;
 const CODE_CONTEXT_MAX_PATH_CHARS = 512;
+const NOTEBOOK_CONTEXT_MAX_CHARS = 48 * 1024;
 
 const getReferencedCodeContext = (raw) => {
   if (!raw || !Array.isArray(raw.files)) {
@@ -99,7 +100,11 @@ const getReferencedCodeContext = (raw) => {
   const files = [];
   let totalChars = 0;
   for (const item of raw.files) {
-    if (!item || typeof item.path !== 'string' || typeof item.content !== 'string') {
+    if (
+      !item ||
+      typeof item.path !== "string" ||
+      typeof item.content !== "string"
+    ) {
       continue;
     }
 
@@ -132,12 +137,18 @@ const getReferencedCodeContext = (raw) => {
 
   return {
     id:
-      typeof raw.id === 'string' && raw.id.trim()
+      typeof raw.id === "string" && raw.id.trim()
         ? raw.id.slice(0, CODE_CONTEXT_MAX_PATH_CHARS)
         : `code-context-${Date.now()}`,
-    title: typeof raw.title === 'string' ? raw.title.slice(0, CODE_CONTEXT_MAX_PATH_CHARS) : '',
+    title:
+      typeof raw.title === "string"
+        ? raw.title.slice(0, CODE_CONTEXT_MAX_PATH_CHARS)
+        : "",
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
-    totalBytes: files.reduce((total, file) => total + Buffer.byteLength(file.content, 'utf8'), 0),
+    totalBytes: files.reduce(
+      (total, file) => total + Buffer.byteLength(file.content, "utf8"),
+      0,
+    ),
     files,
   };
 };
@@ -145,21 +156,21 @@ const getReferencedCodeContext = (raw) => {
 const formatCodeContextAsMarkdown = (codeContext) => {
   const files = codeContext?.files;
   if (!Array.isArray(files) || files.length === 0) {
-    return '';
+    return "";
   }
 
   const fileBlocks = files
     .map((file) => `File: ${file.path}\n\n\`\`\`\n${file.content}\n\`\`\``)
-    .join('\n\n---\n\n');
+    .join("\n\n---\n\n");
 
   return [
-    'Project code context attached by the user.',
-    'Treat these files as read-only reference context unless the user explicitly asks for changes.',
-    'If the user asks you to modify, create, or refactor project files, respond with a unified diff in a fenced ```diff code block so the user can send it to Code mode for review and apply.',
-    'Do not claim that files were changed directly. Do not ask the user to edit files manually when a unified diff can express the change.',
-    '',
+    "Project code context attached by the user.",
+    "Treat these files as read-only reference context unless the user explicitly asks for changes.",
+    "If the user asks you to modify, create, or refactor project files, respond with a unified diff in a fenced ```diff code block so the user can send it to Code mode for review and apply.",
+    "Do not claim that files were changed directly. Do not ask the user to edit files manually when a unified diff can express the change.",
+    "",
     fileBlocks,
-  ].join('\n');
+  ].join("\n");
 };
 
 const mergeCodeContextText = (text, codeContext) => {
@@ -167,8 +178,90 @@ const mergeCodeContextText = (text, codeContext) => {
   if (!block) {
     return text;
   }
-  const body = text ?? '';
+  const body = text ?? "";
   return body.length > 0 ? `${block}\n\nUser request:\n${body}` : block;
+};
+
+const getReferencedNotebookContext = (raw) => {
+  if (!raw || typeof raw.content !== "string") {
+    return null;
+  }
+
+  const content = raw.content.trim().slice(0, NOTEBOOK_CONTEXT_MAX_CHARS);
+  if (!content) {
+    return null;
+  }
+
+  return {
+    id:
+      typeof raw.id === "string"
+        ? raw.id.slice(0, 128)
+        : `notebook-context-${Date.now()}`,
+    title:
+      typeof raw.title === "string"
+        ? raw.title.slice(0, 256)
+        : "Notebook sources",
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+    status:
+      raw.status === "no_enabled_sources" || raw.status === "sources"
+        ? raw.status
+        : "sources",
+    mode: raw.mode === "force" || raw.mode === "auto" ? raw.mode : "auto",
+    totalBytes: Number.isFinite(raw.totalBytes)
+      ? raw.totalBytes
+      : content.length,
+    sourceCount: Number.isFinite(raw.sourceCount) ? raw.sourceCount : 0,
+    chunkCount: Number.isFinite(raw.chunkCount) ? raw.chunkCount : 0,
+    fallback: raw.fallback === true,
+    truncated: raw.truncated === true,
+    content,
+  };
+};
+
+const formatNotebookContextAsMarkdown = (notebookContext) => {
+  const content = notebookContext?.content;
+  if (typeof content !== "string" || !content.trim()) {
+    return "";
+  }
+
+  const isForceMode = notebookContext.mode === "force";
+  const modeRules = isForceMode
+    ? [
+        "Notebook force mode is active for this user request.",
+        "Answer only from the provided current enabled Notebook source context.",
+        "If the answer is not specified in the provided Notebook context, say it is not specified in enabled Notebook sources.",
+        "Do not use old chat history as a substitute for current enabled Notebook sources.",
+      ]
+    : [
+        "Notebook memory mode is active only for relevant current enabled Notebook source context.",
+        "For general chat, answer normally if the Notebook context is not relevant.",
+      ];
+
+  return [
+    "Notebook/Sources context attached by the user for this conversation.",
+    "This is current enabled Notebook source material for this conversation.",
+    "Treat this as read-only reference material. Do not assume sources that are not included.",
+    "Use source and section labels when the answer depends on Notebook context.",
+    "Do not claim disabled or unavailable sources say anything.",
+    ...modeRules,
+    "",
+    content.trim(),
+  ].join("\n");
+};
+
+const mergeReferenceContextText = (text, codeContext, notebookContext) => {
+  const blocks = [
+    formatCodeContextAsMarkdown(codeContext),
+    formatNotebookContextAsMarkdown(notebookContext),
+  ].filter(Boolean);
+  if (blocks.length === 0) {
+    return text;
+  }
+
+  const body = text ?? "";
+  return body.length > 0
+    ? `${blocks.join("\n\n")}\n\nUser request:\n${body}`
+    : blocks.join("\n\n");
 };
 
 const pickFields = (source, fields) => {
@@ -199,7 +292,11 @@ const sanitizeDisplayOnlyAttachment = (ref) => {
   return Object.keys(attachment).length > 0 ? attachment : undefined;
 };
 
-const rehydrateMessageFileRefs = (refs, filesById, { preserveDisplayOnly = false } = {}) => {
+const rehydrateMessageFileRefs = (
+  refs,
+  filesById,
+  { preserveDisplayOnly = false } = {},
+) => {
   if (!Array.isArray(refs)) {
     return undefined;
   }
@@ -228,11 +325,11 @@ const rehydrateMessageFileRefs = (refs, filesById, { preserveDisplayOnly = false
 class BaseClient {
   constructor(apiKey, options = {}) {
     this.apiKey = apiKey;
-    this.sender = options.sender ?? 'AI';
-    this.currentDateString = new Date().toLocaleDateString('en-us', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
+    this.sender = options.sender ?? "AI";
+    this.currentDateString = new Date().toLocaleDateString("en-us", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
     });
     /** @type {boolean} */
     this.skipSaveConvo = false;
@@ -250,10 +347,10 @@ class BaseClient {
     this.attachments;
     /** The key for the usage object's input tokens
      * @type {string} */
-    this.inputTokensKey = 'prompt_tokens';
+    this.inputTokensKey = "prompt_tokens";
     /** The key for the usage object's output tokens
      * @type {string} */
-    this.outputTokensKey = 'completion_tokens';
+    this.outputTokensKey = "completion_tokens";
     /** @type {Set<string>} */
     this.savedMessageIds = new Set();
     /**
@@ -288,22 +385,28 @@ class BaseClient {
   }
 
   getSaveOptions() {
-    throw new Error('Subclasses must implement getSaveOptions');
+    throw new Error("Subclasses must implement getSaveOptions");
   }
 
   async buildMessages() {
-    throw new Error('Subclasses must implement buildMessages');
+    throw new Error("Subclasses must implement buildMessages");
   }
 
   async summarizeMessages() {
-    throw new Error('Subclasses attempted to call summarizeMessages without implementing it');
+    throw new Error(
+      "Subclasses attempted to call summarizeMessages without implementing it",
+    );
   }
 
   /**
    * @returns {string}
    */
   getResponseModel() {
-    if (isAgentsEndpoint(this.options.endpoint) && this.options.agent && this.options.agent.id) {
+    if (
+      isAgentsEndpoint(this.options.endpoint) &&
+      this.options.agent &&
+      this.options.agent.id
+    ) {
       return this.options.agent.id;
     }
 
@@ -316,7 +419,7 @@ class BaseClient {
    * @returns {number}
    */
   getTokenCountForResponse(responseMessage) {
-    logger.debug('[BaseClient] `recordTokenUsage` not implemented.', {
+    logger.debug("[BaseClient] `recordTokenUsage` not implemented.", {
       messageId: responseMessage?.messageId,
     });
   }
@@ -332,8 +435,14 @@ class BaseClient {
    * @param {string} [messageId]
    * @returns {Promise<void>}
    */
-  async recordTokenUsage({ model, balance, promptTokens, completionTokens, messageId }) {
-    logger.debug('[BaseClient] `recordTokenUsage` not implemented.', {
+  async recordTokenUsage({
+    model,
+    balance,
+    promptTokens,
+    completionTokens,
+    messageId,
+  }) {
+    logger.debug("[BaseClient] `recordTokenUsage` not implemented.", {
       model,
       balance,
       messageId,
@@ -355,14 +464,14 @@ class BaseClient {
       url = this.options.reverseProxyUrl;
     }
     logger.debug(`Making request to ${url}`);
-    if (typeof Bun !== 'undefined') {
+    if (typeof Bun !== "undefined") {
       return await fetch(url, init);
     }
     return await fetch(url, init);
   }
 
   getBuildMessagesOptions() {
-    throw new Error('Subclasses must implement getBuildMessagesOptions');
+    throw new Error("Subclasses must implement getBuildMessagesOptions");
   }
 
   async generateTextStream(text, onProgress, options = {}) {
@@ -375,18 +484,23 @@ class BaseClient {
    */
   processOverideIds() {
     /** @type {Record<string, string | undefined>} */
-    let { overrideConvoId, overrideUserMessageId } = this.options?.req?.body ?? {};
+    let { overrideConvoId, overrideUserMessageId } =
+      this.options?.req?.body ?? {};
     if (overrideConvoId) {
-      const [conversationId, index] = overrideConvoId.split(Constants.COMMON_DIVIDER);
+      const [conversationId, index] = overrideConvoId.split(
+        Constants.COMMON_DIVIDER,
+      );
       overrideConvoId = conversationId;
-      if (index !== '0') {
+      if (index !== "0") {
         this.skipSaveConvo = true;
       }
     }
     if (overrideUserMessageId) {
-      const [userMessageId, index] = overrideUserMessageId.split(Constants.COMMON_DIVIDER);
+      const [userMessageId, index] = overrideUserMessageId.split(
+        Constants.COMMON_DIVIDER,
+      );
       overrideUserMessageId = userMessageId;
-      if (index !== '0') {
+      if (index !== "0") {
         this.skipSaveUserMessage = true;
       }
     }
@@ -409,7 +523,9 @@ class BaseClient {
     const conversationId = requestConvoId ?? crypto.randomUUID();
     const parentMessageId = opts.parentMessageId ?? Constants.NO_PARENT;
     const userMessageId =
-      overrideUserMessageId ?? opts.overrideParentMessageId ?? crypto.randomUUID();
+      overrideUserMessageId ??
+      opts.overrideParentMessageId ??
+      crypto.randomUUID();
     let responseMessageId = opts.responseMessageId ?? crypto.randomUUID();
     let head = isEdited ? responseMessageId : parentMessageId;
     this.currentMessages = (await this.loadHistory(conversationId, head)) ?? [];
@@ -421,7 +537,7 @@ class BaseClient {
       this.currentMessages[this.currentMessages.length - 1].messageId = head;
     }
 
-    if (opts.isRegenerate && responseMessageId.endsWith('_')) {
+    if (opts.isRegenerate && responseMessageId.endsWith("_")) {
       responseMessageId = crypto.randomUUID();
     }
 
@@ -445,7 +561,7 @@ class BaseClient {
       messageId,
       parentMessageId,
       conversationId,
-      sender: 'User',
+      sender: "User",
       text,
       isCreatedByUser: true,
     };
@@ -481,17 +597,21 @@ class BaseClient {
      * keeping the stored `text` clean while the count stays consistent.
      */
     if (!opts.isEdited) {
-      const referencedQuotes = getReferencedQuotes(this.options.req?.body?.quotes);
+      const referencedQuotes = getReferencedQuotes(
+        this.options.req?.body?.quotes,
+      );
       if (referencedQuotes != null) {
         userMessage.quotes = referencedQuotes;
       }
-      const referencedCodeContext = getReferencedCodeContext(this.options.req?.body?.codeContext);
+      const referencedCodeContext = getReferencedCodeContext(
+        this.options.req?.body?.codeContext,
+      );
       if (referencedCodeContext != null) {
         userMessage.codeContext = referencedCodeContext;
       }
     }
 
-    if (typeof opts?.getReqData === 'function') {
+    if (typeof opts?.getReqData === "function") {
       opts.getReqData({
         userMessage,
         conversationId,
@@ -500,8 +620,9 @@ class BaseClient {
       });
     }
 
-    if (typeof opts?.onStart === 'function') {
-      const isNewConvo = !requestConvoId && parentMessageId === Constants.NO_PARENT;
+    if (typeof opts?.onStart === "function") {
+      const isNewConvo =
+        !requestConvoId && parentMessageId === Constants.NO_PARENT;
       opts.onStart(userMessage, responseMessageId, isNewConvo);
     }
 
@@ -554,7 +675,7 @@ class BaseClient {
     return messages.reduce((acc, message) => {
       const nameOrRole = message.name ?? message.role;
       return acc + `${nameOrRole}:\n${message.content}\n\n`;
-    }, '');
+    }, "");
   }
 
   /**
@@ -576,7 +697,11 @@ class BaseClient {
    *    `remainingContextTokens` is the number of tokens remaining within the limit after adding the messages to the context.
    *    `messagesToRefine` is an array of messages that were not added to the context because they would have exceeded the token limit.
    */
-  async getMessagesWithinTokenLimit({ messages: _messages, maxContextTokens, instructions }) {
+  async getMessagesWithinTokenLimit({
+    messages: _messages,
+    maxContextTokens,
+    instructions,
+  }) {
     // Every reply is primed with <|start|>assistant<|message|>, so we
     // start with 3 tokens for the label after all messages have been counted.
     let currentTokenCount = 3;
@@ -588,14 +713,20 @@ class BaseClient {
     const context = [];
 
     if (currentTokenCount < remainingContextTokens) {
-      while (messages.length > 0 && currentTokenCount < remainingContextTokens) {
+      while (
+        messages.length > 0 &&
+        currentTokenCount < remainingContextTokens
+      ) {
         if (messages.length === 1 && instructions) {
           break;
         }
         const poppedMessage = messages.pop();
         const { tokenCount } = poppedMessage;
 
-        if (poppedMessage && currentTokenCount + tokenCount <= remainingContextTokens) {
+        if (
+          poppedMessage &&
+          currentTokenCount + tokenCount <= remainingContextTokens
+        ) {
           context.push(poppedMessage);
           currentTokenCount += tokenCount;
         } else {
@@ -624,8 +755,15 @@ class BaseClient {
     const appConfig = this.options.req?.config;
     /** @type {Promise<TMessage>} */
     let userMessagePromise;
-    const { user, head, isEdited, conversationId, responseMessageId, saveOptions, userMessage } =
-      await this.handleStartMethods(message, opts);
+    const {
+      user,
+      head,
+      isEdited,
+      conversationId,
+      responseMessageId,
+      saveOptions,
+      userMessage,
+    } = await this.handleStartMethods(message, opts);
 
     if (opts.progressCallback) {
       opts.onProgress = opts.progressCallback.call(null, {
@@ -654,13 +792,23 @@ class BaseClient {
         this.currentMessages.push(userMessage, latestMessage);
       } else if (editedContent != null) {
         // Handle editedContent for content parts
-        if (editedContent && latestMessage.content && Array.isArray(latestMessage.content)) {
+        if (
+          editedContent &&
+          latestMessage.content &&
+          Array.isArray(latestMessage.content)
+        ) {
           const { index, text, type } = editedContent;
           if (index >= 0 && index < latestMessage.content.length) {
             const contentPart = latestMessage.content[index];
-            if (type === ContentTypes.THINK && contentPart.type === ContentTypes.THINK) {
+            if (
+              type === ContentTypes.THINK &&
+              contentPart.type === ContentTypes.THINK
+            ) {
               contentPart[ContentTypes.THINK] = text;
-            } else if (type === ContentTypes.TEXT && contentPart.type === ContentTypes.TEXT) {
+            } else if (
+              type === ContentTypes.TEXT &&
+              contentPart.type === ContentTypes.TEXT
+            ) {
               contentPart[ContentTypes.TEXT] = text;
             }
           }
@@ -680,19 +828,32 @@ class BaseClient {
     let payload;
     let tokenCountMap;
     let promptTokens;
-    const codeContext = getReferencedCodeContext(this.options.req?.body?.codeContext);
+    const codeContext = getReferencedCodeContext(
+      this.options.req?.body?.codeContext,
+    );
+    const notebookContext = getReferencedNotebookContext(
+      this.options.req?.body?.notebookContext,
+    );
     const messagesForBuild =
-      codeContext == null
+      codeContext == null && notebookContext == null
         ? this.currentMessages
         : this.currentMessages.map((currentMessage) =>
             currentMessage.messageId === userMessage.messageId
               ? {
                   ...currentMessage,
-                  text: mergeCodeContextText(currentMessage.text, codeContext),
+                  text: mergeReferenceContextText(
+                    currentMessage.text,
+                    codeContext,
+                    notebookContext,
+                  ),
                 }
               : currentMessage,
           );
-    ({ prompt: payload, tokenCountMap, promptTokens } = await this.buildMessages(
+    ({
+      prompt: payload,
+      tokenCountMap,
+      promptTokens,
+    } = await this.buildMessages(
       messagesForBuild,
       parentMessageId,
       this.getBuildMessagesOptions(opts),
@@ -701,7 +862,7 @@ class BaseClient {
 
     if (tokenCountMap && tokenCountMap[userMessage.messageId]) {
       userMessage.tokenCount = tokenCountMap[userMessage.messageId];
-      logger.debug('[BaseClient] userMessage', {
+      logger.debug("[BaseClient] userMessage", {
         messageId: userMessage.messageId,
         tokenCount: userMessage.tokenCount,
         conversationId: userMessage.conversationId,
@@ -728,7 +889,9 @@ class BaseClient {
        */
       const rawManualSkills = this.options.req?.body?.manualSkills;
       if (Array.isArray(rawManualSkills) && rawManualSkills.length > 0) {
-        const skills = rawManualSkills.filter((s) => typeof s === 'string' && s.length > 0);
+        const skills = rawManualSkills.filter(
+          (s) => typeof s === "string" && s.length > 0,
+        );
         if (skills.length > 0) {
           userMessage.manualSkills = skills;
         }
@@ -742,22 +905,27 @@ class BaseClient {
        * their audit trail even if an admin flips `alwaysApply` off later.
        */
       const alwaysApplySkillPrimes = this.options.agent?.alwaysApplySkillPrimes;
-      if (Array.isArray(alwaysApplySkillPrimes) && alwaysApplySkillPrimes.length > 0) {
+      if (
+        Array.isArray(alwaysApplySkillPrimes) &&
+        alwaysApplySkillPrimes.length > 0
+      ) {
         const names = alwaysApplySkillPrimes
           .map((p) => p?.name)
-          .filter((n) => typeof n === 'string' && n.length > 0);
+          .filter((n) => typeof n === "string" && n.length > 0);
         if (names.length > 0) {
           userMessage.alwaysAppliedSkills = names;
         }
       }
-      userMessagePromise = this.saveMessageToDatabase(userMessage, saveOptions, user).catch(
-        (err) => {
-          logger.error('[BaseClient] Failed to save user message:', err);
-          return {};
-        },
-      );
+      userMessagePromise = this.saveMessageToDatabase(
+        userMessage,
+        saveOptions,
+        user,
+      ).catch((err) => {
+        logger.error("[BaseClient] Failed to save user message:", err);
+        return {};
+      });
       this.savedMessageIds.add(userMessage.messageId);
-      if (typeof opts?.getReqData === 'function') {
+      if (typeof opts?.getReqData === "function") {
         opts.getReqData({
           userMessagePromise,
         });
@@ -775,7 +943,7 @@ class BaseClient {
           res: this.options.res,
           txData: {
             user: this.user,
-            tokenType: 'prompt',
+            tokenType: "prompt",
             amount: promptTokens,
             endpoint: this.options.endpoint,
             model: this.modelOptions?.model ?? this.model,
@@ -814,19 +982,20 @@ class BaseClient {
       metadata: Object.keys(metadata ?? {}).length > 0 ? metadata : undefined,
     };
 
-    if (typeof completion === 'string') {
+    if (typeof completion === "string") {
       responseMessage.text = completion;
     } else if (
       Array.isArray(completion) &&
       (this.clientName === EModelEndpoint.agents ||
         isParamEndpoint(this.options.endpoint, this.options.endpointType))
     ) {
-      responseMessage.text = '';
+      responseMessage.text = "";
 
       if (!opts.editedContent || this.currentMessages.length === 0) {
         responseMessage.content = completion;
       } else {
-        const latestMessage = this.currentMessages[this.currentMessages.length - 1];
+        const latestMessage =
+          this.currentMessages[this.currentMessages.length - 1];
         if (!latestMessage?.content) {
           responseMessage.content = completion;
         } else {
@@ -840,10 +1009,14 @@ class BaseClient {
         }
       }
     } else if (Array.isArray(completion)) {
-      responseMessage.text = completion.join('');
+      responseMessage.text = completion.join("");
     }
 
-    if (tokenCountMap && this.recordTokenUsage && this.getTokenCountForResponse) {
+    if (
+      tokenCountMap &&
+      this.recordTokenUsage &&
+      this.getTokenCountForResponse
+    ) {
       let completionTokens;
 
       /**
@@ -857,7 +1030,8 @@ class BaseClient {
         responseMessage.tokenCount = usage[this.outputTokensKey];
         completionTokens = responseMessage.tokenCount;
       } else {
-        responseMessage.tokenCount = this.getTokenCountForResponse(responseMessage);
+        responseMessage.tokenCount =
+          this.getTokenCountForResponse(responseMessage);
         completionTokens = responseMessage.tokenCount;
         await this.recordTokenUsage({
           usage,
@@ -870,7 +1044,7 @@ class BaseClient {
         });
       }
 
-      logger.debug('[BaseClient] Response token usage', {
+      logger.debug("[BaseClient] Response token usage", {
         messageId: responseMessage.messageId,
         model: responseMessage.model,
         promptTokens,
@@ -887,9 +1061,11 @@ class BaseClient {
       this.contextMeta.calibrationRatio !== 1 &&
       userMessage.tokenCount > 0
     ) {
-      const calibrated = Math.round(userMessage.tokenCount * this.contextMeta.calibrationRatio);
+      const calibrated = Math.round(
+        userMessage.tokenCount * this.contextMeta.calibrationRatio,
+      );
       if (calibrated !== userMessage.tokenCount) {
-        logger.debug('[BaseClient] Calibrated user message tokenCount', {
+        logger.debug("[BaseClient] Calibrated user message tokenCount", {
           messageId: userMessage.messageId,
           raw: userMessage.tokenCount,
           calibrated,
@@ -904,14 +1080,21 @@ class BaseClient {
     }
 
     if (this.artifactPromises) {
-      responseMessage.attachments = (await Promise.all(this.artifactPromises)).filter((a) => a);
+      responseMessage.attachments = (
+        await Promise.all(this.artifactPromises)
+      ).filter((a) => a);
     }
 
     if (this.options.attachments) {
       try {
-        saveOptions.files = this.options.attachments.map((attachments) => attachments.file_id);
+        saveOptions.files = this.options.attachments.map(
+          (attachments) => attachments.file_id,
+        );
       } catch (error) {
-        logger.error('[BaseClient] Error mapping attachments for conversation', error);
+        logger.error(
+          "[BaseClient] Error mapping attachments for conversation",
+          error,
+        );
       }
     }
 
@@ -929,9 +1112,13 @@ class BaseClient {
   }
 
   async loadHistory(conversationId, parentMessageId = null) {
-    logger.debug('[BaseClient] Loading history:', { conversationId, parentMessageId });
+    logger.debug("[BaseClient] Loading history:", {
+      conversationId,
+      parentMessageId,
+    });
 
-    const messages = (await db.getMessages({ conversationId, user: this.user })) ?? [];
+    const messages =
+      (await db.getMessages({ conversationId, user: this.user })) ?? [];
 
     if (messages.length === 0) {
       return [];
@@ -977,8 +1164,9 @@ class BaseClient {
     }
 
     if (this.previous_summary) {
-      const { messageId, summary, tokenCount, summaryTokenCount } = this.previous_summary;
-      logger.debug('[BaseClient] Previous summary:', {
+      const { messageId, summary, tokenCount, summaryTokenCount } =
+        this.previous_summary;
+      logger.debug("[BaseClient] Previous summary:", {
         messageId,
         summary,
         tokenCount,
@@ -1001,12 +1189,14 @@ class BaseClient {
     // remains valid (disposeClient nulls the property, not the object itself).
     const options = this.options;
     if (!options) {
-      logger.error('[BaseClient] saveMessageToDatabase: client disposed before save, skipping');
+      logger.error(
+        "[BaseClient] saveMessageToDatabase: client disposed before save, skipping",
+      );
       return {};
     }
 
     if (this.user && user !== this.user) {
-      throw new Error('User mismatch.');
+      throw new Error("User mismatch.");
     }
 
     const hasAddedConvo = options?.req?.body?.addedConvo != null;
@@ -1024,7 +1214,10 @@ class BaseClient {
         user,
         ...(hasAddedConvo && { addedConvo: true }),
       },
-      { context: 'api/app/clients/BaseClient.js - saveMessageToDatabase #saveMessage' },
+      {
+        context:
+          "api/app/clients/BaseClient.js - saveMessageToDatabase #saveMessage",
+      },
     );
 
     if (this.skipSaveConvo) {
@@ -1039,7 +1232,9 @@ class BaseClient {
     };
     const conversationCreatedAt = options?.req?.conversationCreatedAt;
     const createdAtOnInsert =
-      conversationCreatedAt != null ? new Date(conversationCreatedAt) : undefined;
+      conversationCreatedAt != null
+        ? new Date(conversationCreatedAt)
+        : undefined;
     const validCreatedAtOnInsert =
       createdAtOnInsert && !Number.isNaN(createdAtOnInsert.getTime())
         ? createdAtOnInsert
@@ -1048,7 +1243,8 @@ class BaseClient {
     const req = options?.req;
     const skippedExistingConvoLookup = this.fetchedConvo === true;
     const hasResolvedConversation =
-      req != null && Object.prototype.hasOwnProperty.call(req, 'resolvedConversation');
+      req != null &&
+      Object.prototype.hasOwnProperty.call(req, "resolvedConversation");
     let existingConvo = null;
     if (!skippedExistingConvoLookup && hasResolvedConversation) {
       existingConvo = req.resolvedConversation;
@@ -1058,16 +1254,17 @@ class BaseClient {
     if (hasResolvedConversation) {
       delete req.resolvedConversation;
     }
-    const shouldSetCreatedAtOnInsert = !skippedExistingConvoLookup && existingConvo == null;
+    const shouldSetCreatedAtOnInsert =
+      !skippedExistingConvoLookup && existingConvo == null;
 
     const unsetFields = {};
-    const exceptions = new Set(['spec', 'iconURL']);
+    const exceptions = new Set(["spec", "iconURL"]);
     const hasNonEphemeralAgent =
       isAgentsEndpoint(options.endpoint) &&
       endpointOptions?.agent_id &&
       !isEphemeralAgentId(endpointOptions.agent_id);
     if (hasNonEphemeralAgent) {
-      exceptions.add('model');
+      exceptions.add("model");
     }
     if (existingConvo != null) {
       this.fetchedConvo = true;
@@ -1086,9 +1283,12 @@ class BaseClient {
     }
 
     const conversation = await db.saveConvo(reqCtx, fieldsToKeep, {
-      context: 'api/app/clients/BaseClient.js - saveMessageToDatabase #saveConvo',
+      context:
+        "api/app/clients/BaseClient.js - saveMessageToDatabase #saveConvo",
       unsetFields,
-      createdAtOnInsert: shouldSetCreatedAtOnInsert ? validCreatedAtOnInsert : undefined,
+      createdAtOnInsert: shouldSetCreatedAtOnInsert
+        ? validCreatedAtOnInsert
+        : undefined,
     });
 
     return { message: savedMessage, conversation };
@@ -1105,12 +1305,12 @@ class BaseClient {
   /** Extracts text from a summary block (handles both legacy `text` field and new `content` array format). */
   static getSummaryText(summaryBlock) {
     if (Array.isArray(summaryBlock.content)) {
-      return summaryBlock.content.map((b) => b.text ?? '').join('');
+      return summaryBlock.content.map((b) => b.text ?? "").join("");
     }
-    if (typeof summaryBlock.content === 'string') {
+    if (typeof summaryBlock.content === "string") {
       return summaryBlock.content;
     }
-    return summaryBlock.text ?? '';
+    return summaryBlock.text ?? "";
   }
 
   /** Finds the last summary content block in a message's content array (last-summary-wins). */
@@ -1192,7 +1392,7 @@ class BaseClient {
           const summaryText = BaseClient.getSummaryText(summaryBlock);
           resolved = {
             ...message,
-            role: 'system',
+            role: "system",
             content: [{ type: ContentTypes.TEXT, text: summaryText }],
             tokenCount: summaryBlock.tokenCount,
           };
@@ -1200,7 +1400,7 @@ class BaseClient {
         } else if (message.summary) {
           resolved = {
             ...message,
-            role: 'system',
+            role: "system",
             content: [{ type: ContentTypes.TEXT, text: message.summary }],
             tokenCount: message.summaryTokenCount ?? message.tokenCount,
           };
@@ -1208,7 +1408,9 @@ class BaseClient {
         }
       }
 
-      const shouldMap = mapMethod != null && (mapCondition != null ? mapCondition(resolved) : true);
+      const shouldMap =
+        mapMethod != null &&
+        (mapCondition != null ? mapCondition(resolved) : true);
       const processedMessage = shouldMap ? mapMethod(resolved) : resolved;
       orderedMessages.push(processedMessage);
 
@@ -1217,7 +1419,9 @@ class BaseClient {
       }
 
       currentMessageId =
-        message.parentMessageId === Constants.NO_PARENT ? null : message.parentMessageId;
+        message.parentMessageId === Constants.NO_PARENT
+          ? null
+          : message.parentMessageId;
     }
 
     orderedMessages.reverse();
@@ -1244,7 +1448,7 @@ class BaseClient {
     let tokensPerName = 1;
     const model = this.modelOptions?.model ?? this.model;
 
-    if (model === 'gpt-3.5-turbo-0301') {
+    if (model === "gpt-3.5-turbo-0301") {
       tokensPerMessage = 4;
       tokensPerName = -1;
     }
@@ -1263,18 +1467,18 @@ class BaseClient {
           }
 
           if (item.type === ContentTypes.TOOL_CALL && item.tool_call != null) {
-            const toolName = item.tool_call?.name || '';
-            if (toolName != null && toolName && typeof toolName === 'string') {
+            const toolName = item.tool_call?.name || "";
+            if (toolName != null && toolName && typeof toolName === "string") {
               numTokens += this.getTokenCount(toolName);
             }
 
-            const args = item.tool_call?.args || '';
-            if (args != null && args && typeof args === 'string') {
+            const args = item.tool_call?.args || "";
+            if (args != null && args && typeof args === "string") {
               numTokens += this.getTokenCount(args);
             }
 
-            const output = item.tool_call?.output || '';
-            if (output != null && output && typeof output === 'string') {
+            const output = item.tool_call?.output || "";
+            if (output != null && output && typeof output === "string") {
               numTokens += this.getTokenCount(output);
             }
             continue;
@@ -1288,11 +1492,11 @@ class BaseClient {
 
           processValue(nestedValue);
         }
-      } else if (typeof value === 'string') {
+      } else if (typeof value === "string") {
         numTokens += this.getTokenCount(value);
-      } else if (typeof value === 'number') {
+      } else if (typeof value === "number") {
         numTokens += this.getTokenCount(value.toString());
-      } else if (typeof value === 'boolean') {
+      } else if (typeof value === "boolean") {
         numTokens += this.getTokenCount(value.toString());
       }
     };
@@ -1301,7 +1505,7 @@ class BaseClient {
     for (let [key, value] of Object.entries(message)) {
       processValue(value);
 
-      if (key === 'name') {
+      if (key === "name") {
         numTokens += tokensPerName;
       }
     }
@@ -1328,7 +1532,10 @@ class BaseClient {
     const lastExisting = existingContent[lastIndex];
     const firstNew = newCompletion[0];
 
-    if (lastExisting?.type !== firstNew?.type || firstNew?.type !== editedType) {
+    if (
+      lastExisting?.type !== firstNew?.type ||
+      firstNew?.type !== editedType
+    ) {
       return existingContent.concat(newCompletion);
     }
 
@@ -1337,14 +1544,15 @@ class BaseClient {
       mergedContent[lastIndex] = {
         ...mergedContent[lastIndex],
         [ContentTypes.TEXT]:
-          (mergedContent[lastIndex][ContentTypes.TEXT] || '') + (firstNew[ContentTypes.TEXT] || ''),
+          (mergedContent[lastIndex][ContentTypes.TEXT] || "") +
+          (firstNew[ContentTypes.TEXT] || ""),
       };
     } else {
       mergedContent[lastIndex] = {
         ...mergedContent[lastIndex],
         [ContentTypes.THINK]:
-          (mergedContent[lastIndex][ContentTypes.THINK] || '') +
-          (firstNew[ContentTypes.THINK] || ''),
+          (mergedContent[lastIndex][ContentTypes.THINK] || "") +
+          (firstNew[ContentTypes.THINK] || ""),
       };
     }
 
@@ -1353,7 +1561,7 @@ class BaseClient {
   }
 
   async sendPayload(payload, opts = {}) {
-    if (opts && typeof opts === 'object') {
+    if (opts && typeof opts === "object") {
       this.setOptions(opts);
     }
 
@@ -1390,7 +1598,9 @@ class BaseClient {
       getStrategyFunctions,
     );
     message.videos =
-      videoResult.videos && videoResult.videos.length ? videoResult.videos : undefined;
+      videoResult.videos && videoResult.videos.length
+        ? videoResult.videos
+        : undefined;
     return videoResult.files;
   }
 
@@ -1405,7 +1615,9 @@ class BaseClient {
       getStrategyFunctions,
     );
     message.audios =
-      audioResult.audios && audioResult.audios.length ? audioResult.audios : undefined;
+      audioResult.audios && audioResult.audios.length
+        ? audioResult.audios
+        : undefined;
     return audioResult.files;
   }
 
@@ -1442,7 +1654,9 @@ class BaseClient {
     const isBedrock = provider === EModelEndpoint.bedrock;
 
     if (!this._mergedFileConfig) {
-      this._mergedFileConfig = mergeFileConfig(this.options.req?.config?.fileConfig);
+      this._mergedFileConfig = mergeFileConfig(
+        this.options.req?.config?.fileConfig,
+      );
       const endpoint = this.options.agent?.endpoint ?? this.options.endpoint;
       this._endpointFileConfig = getEndpointFileConfig({
         fileConfig: this._mergedFileConfig,
@@ -1467,25 +1681,28 @@ class BaseClient {
         continue;
       }
 
-      if (file.type.startsWith('image/')) {
+      if (file.type.startsWith("image/")) {
         categorizedAttachments.images.push(file);
-      } else if (file.type === 'application/pdf') {
+      } else if (file.type === "application/pdf") {
         categorizedAttachments.documents.push(file);
         allFiles.push(file);
       } else if (isBedrock && isBedrockDocumentType(file.type)) {
         categorizedAttachments.documents.push(file);
         allFiles.push(file);
-      } else if (file.type.startsWith('video/')) {
+      } else if (file.type.startsWith("video/")) {
         categorizedAttachments.videos.push(file);
         allFiles.push(file);
-      } else if (file.type.startsWith('audio/')) {
+      } else if (file.type.startsWith("audio/")) {
         categorizedAttachments.audios.push(file);
         allFiles.push(file);
       } else if (
         file.type &&
         this._mergedFileConfig &&
         this._endpointFileConfig?.supportedMimeTypes &&
-        this._mergedFileConfig.checkType(file.type, this._endpointFileConfig.supportedMimeTypes)
+        this._mergedFileConfig.checkType(
+          file.type,
+          this._endpointFileConfig.supportedMimeTypes,
+        )
       ) {
         categorizedAttachments.documents.push(file);
         allFiles.push(file);
@@ -1535,7 +1752,8 @@ class BaseClient {
 
     const contextSeen = new Set();
     const attachmentsProcessed =
-      this.options.attachments && !(this.options.attachments instanceof Promise);
+      this.options.attachments &&
+      !(this.options.attachments instanceof Promise);
     if (attachmentsProcessed) {
       for (const attachment of this.options.attachments) {
         if (attachment?.file_id) {
@@ -1545,7 +1763,10 @@ class BaseClient {
     }
 
     const historicalFileIds = collectHistoricalFileIds(_messages);
-    const fileFilter = buildOwnerFileFilter(historicalFileIds, this.options.req?.user);
+    const fileFilter = buildOwnerFileFilter(
+      historicalFileIds,
+      this.options.req?.user,
+    );
     const authorizedFilesById = new Map();
     if (fileFilter) {
       const files = (await db.getFiles(fileFilter, {}, {})) ?? [];
@@ -1582,7 +1803,10 @@ class BaseClient {
         }
       }
 
-      const rehydratedFiles = rehydrateMessageFileRefs(message.files, authorizedFilesById);
+      const rehydratedFiles = rehydrateMessageFileRefs(
+        message.files,
+        authorizedFilesById,
+      );
       if (rehydratedFiles) {
         message.files = rehydratedFiles;
       } else {
