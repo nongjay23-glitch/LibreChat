@@ -9,8 +9,8 @@ import ConversationsSection from "~/components/UnifiedSidebar/ConversationsSecti
 import { useGetEndpointsQuery, useGetStartupConfig } from "~/data-provider";
 import useSideNavLinks from "~/hooks/Nav/useSideNavLinks";
 import CodePanel from "~/components/Workspace/CodePanel";
+import CoworkRoomsList from "~/components/Workspace/CoworkRoomsList";
 import store from "~/store";
-import CoworkPanel from "~/components/Workspace/CoworkPanel";
 
 const defaultInterface = getConfigDefaults().interface;
 
@@ -67,7 +67,7 @@ export default function useUnifiedSidebarLinks() {
       label: "",
       icon: UsersRound,
       id: "cowork",
-      Component: CoworkPanel,
+      Component: CoworkRoomsList,
     };
     const codeLink: NavLink = {
       title: "com_ui_code",

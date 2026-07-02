@@ -151,8 +151,10 @@ CW-1B.3 - Documentation update for separate Cowork chat architecture:
 CW-1B.4 - Cowork mode shell:
 
 - Active Cowork mode should render a right-side `CoworkChatView` placeholder.
+- Started: Cowork active mode can render a separate right-side `CoworkChatView` placeholder and a left-side Cowork rooms placeholder.
 - No AI changes yet.
 - No backend changes yet.
+- No Cowork room/message persistence yet.
 - Preserve normal Chat behavior when Chat mode is active.
 
 CW-1B.5 - Local Cowork rooms:

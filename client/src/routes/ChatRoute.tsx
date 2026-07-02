@@ -29,8 +29,9 @@ import {
   useNewConvo,
   useLocalize,
 } from '~/hooks';
-import { ToolCallsMapProvider } from '~/Providers';
+import { ToolCallsMapProvider, useActivePanel } from '~/Providers';
 import ChatView from '~/components/Chat/ChatView';
+import CoworkChatView from '~/components/Workspace/CoworkChatView';
 import { NotificationSeverity } from '~/common';
 import useAuthRedirect from './useAuthRedirect';
 import temporaryStore from '~/store/temporary';
@@ -42,6 +43,7 @@ const isValidChatProjectId = (projectId: string | null): projectId is string =>
 export default function ChatRoute() {
   const { data: startupConfig } = useGetStartupConfig();
   const { isAuthenticated, user, roles } = useAuthRedirect();
+  const { active } = useActivePanel();
   const queryClient = useQueryClient();
 
   const defaultTemporaryChat = useRecoilValue(temporaryStore.defaultTemporaryChat);
@@ -284,6 +286,10 @@ export default function ChatRoute() {
 
   if (!isAuthenticated) {
     return null;
+  }
+
+  if (active === 'cowork') {
+    return <CoworkChatView />;
   }
 
   // if not a conversation
