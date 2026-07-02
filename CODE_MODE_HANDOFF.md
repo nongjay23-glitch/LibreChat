@@ -392,6 +392,7 @@ Phase CW-1: Read-only Cowork AI Planner
 - Add read-only Cowork AI planning behavior.
 - Structured output: Goal, Current understanding, Clarifying questions, In scope, Out of scope, Likely files to inspect, Risks / side effects, Small phased plan, Codex/Code handoff prompt, Manual test checklist.
 - No file writes, patch apply, terminal commands, backend write routes, agents, or autonomous behavior.
+- Phase CW-1A.1 added the dedicated backend endpoint `POST /api/workspace/cowork/planner` for a read-only Cowork planner. The endpoint sanitizes Cowork draft input, creates a strict planner prompt, calls the configured model through a request-only completion path, parses strict JSON, and returns planner output without normal chat history, Notebook/source context, code context, source chunks, or DB message persistence. The Cowork UI button is not implemented yet. Next phase: `Phase CW-1A.2 - Ask Cowork AI Button` with preview / accept / discard.
 - Suggested commit after verification: `Add read-only cowork AI planner`.
 
 Phase 2: Chat handoff polish

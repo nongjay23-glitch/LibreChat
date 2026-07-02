@@ -34,6 +34,11 @@ const MAX_CHECKPOINT_KEEP = 50;
 const CHECKPOINT_DIR = '.workspace-checkpoints';
 const ACTIVITY_FILE = '.workspace-activity.jsonl';
 const MAX_ACTIVITY_ITEMS = 50;
+const MAX_COWORK_PLANNER_PROMPT_BYTES = 32 * 1024;
+const MAX_COWORK_STRING_LENGTH = 1200;
+const MAX_COWORK_CODEX_PROMPT_LENGTH = 6000;
+const MAX_COWORK_LIST_ITEMS = 24;
+const MAX_COWORK_STEPS = 12;
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_READONLY_ROOT || '/readonly-workspace');
 const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
   ? path.resolve(process.env.WORKSPACE_WRITE_ROOT)
@@ -44,6 +49,27 @@ const NODE_SYNTAX_EXTENSIONS = new Set(['.cjs', '.js', '.mjs']);
 const TS_SYNTAX_EXTENSIONS = new Set(['.ts', '.tsx']);
 const VERIFICATION_PROFILES = new Set(['fast', 'normal', 'strict']);
 const MAX_SOURCE_CHAT_PROMPT_BYTES = 32 * 1024;
+const COWORK_STEP_STATUSES = new Set(['todo', 'doing', 'done', 'blocked']);
+const COWORK_OUTPUT_STEP_STATUSES = new Set(['todo']);
+const COWORK_DEFAULT_AVOID_FILES = [
+  '.env',
+  'token',
+  'password',
+  'credential',
+  '.git',
+  'node_modules',
+  'logs',
+  'uploads',
+  'database files',
+  'binary files',
+  'provider config files containing secrets',
+];
+const COWORK_SECRET_PATTERN =
+  /\b(api[-_ ]?key|bearer\s+token|bearer|password|secret|credential)\b|-----BEGIN/i;
+const COWORK_COMMAND_PATTERN =
+  /(^|\n|\s)(npm|yarn|pnpm|node|python|pip|docker|git|curl|wget|rm|del|erase|powershell|pwsh|cmd|bash|sh|Invoke-WebRequest|Remove-Item|Move-Item|Copy-Item)\s+/i;
+const COWORK_EDIT_CLAIM_PATTERN =
+  /\b(I|I've|I have|we|we've|we have)\s+(edited|changed|modified|created|deleted|renamed|moved|applied|patched|ran|executed|updated)\b/i;
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -164,6 +190,262 @@ function getSafeSourceChatErrorMessage(error) {
     .replace(/\b(sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
     .replace(/\b(api[-_ ]?key|token|password|credential|secret)=\S+/gi, '$1=[redacted]')
     .slice(0, 500);
+}
+
+function getSafeCoworkPlannerErrorMessage(error) {
+  const rawMessage = error?.message || 'Cowork planner request failed.';
+  return String(rawMessage)
+    .replace(/\b(sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
+    .replace(/\b(api[-_ ]?key|token|password|credential|secret)=\S+/gi, '$1=[redacted]')
+    .slice(0, 240);
+}
+
+function isSuspiciousCoworkText(value = '') {
+  return (
+    COWORK_SECRET_PATTERN.test(value) ||
+    COWORK_COMMAND_PATTERN.test(value) ||
+    COWORK_EDIT_CLAIM_PATTERN.test(value)
+  );
+}
+
+function sanitizeCoworkText(value, maxLength = MAX_COWORK_STRING_LENGTH) {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  const trimmed = value.trim();
+  if (!trimmed || COWORK_SECRET_PATTERN.test(trimmed)) {
+    return '';
+  }
+  return trimmed.slice(0, maxLength);
+}
+
+function sanitizeCoworkList(value, maxLength = MAX_COWORK_STRING_LENGTH) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => sanitizeCoworkText(item, maxLength))
+    .filter(Boolean)
+    .slice(0, MAX_COWORK_LIST_ITEMS);
+}
+
+function uniqueCoworkList(items = []) {
+  const seen = new Set();
+  const result = [];
+  for (const item of items) {
+    const normalized = item.toLowerCase();
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    result.push(item);
+  }
+  return result;
+}
+
+function sanitizeCoworkSteps(value, outputOnly = false) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((step) => {
+      const title = sanitizeCoworkText(step?.title);
+      if (!title) {
+        return null;
+      }
+      const status = typeof step?.status === 'string' ? step.status : 'todo';
+      return {
+        title,
+        status:
+          (outputOnly ? COWORK_OUTPUT_STEP_STATUSES : COWORK_STEP_STATUSES).has(status)
+            ? status
+            : 'todo',
+      };
+    })
+    .filter(Boolean)
+    .slice(0, MAX_COWORK_STEPS);
+}
+
+function sanitizeCoworkDraft(value = {}) {
+  return {
+    goal: sanitizeCoworkText(value.goal),
+    scope: sanitizeCoworkList(value.scope),
+    exclusions: sanitizeCoworkList(value.exclusions),
+    steps: sanitizeCoworkSteps(value.steps),
+    inspectFiles: sanitizeCoworkList(value.inspectFiles),
+    suggestedFiles: sanitizeCoworkList(value.suggestedFiles),
+    avoidFiles: uniqueCoworkList([
+      ...sanitizeCoworkList(value.avoidFiles),
+      ...COWORK_DEFAULT_AVOID_FILES,
+    ]),
+    risks: sanitizeCoworkList(value.risks),
+    verification: sanitizeCoworkList(value.verification),
+    nextAction: sanitizeCoworkText(value.nextAction),
+  };
+}
+
+function formatCoworkList(items = []) {
+  return items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- none provided';
+}
+
+function formatCoworkSteps(steps = []) {
+  return steps.length > 0
+    ? steps.map((step, index) => `${index + 1}. [${step.status}] ${step.title}`).join('\n')
+    : '1. [todo] none provided';
+}
+
+function createCoworkPlannerPrompt(draft) {
+  return [
+    'You are Cowork AI Planner.',
+    'You are read-only.',
+    'You do not edit files.',
+    'You do not run terminal commands.',
+    'You do not apply patches.',
+    'You do not create, delete, rename, or move files.',
+    'You do not claim changes were made.',
+    'You do not use chat history.',
+    'You do not use Notebook sources.',
+    'You do not use source chunks.',
+    'You only use the Cowork draft provided in this request.',
+    'You produce a structured plan.',
+    'You keep scope small.',
+    'You ask clarifying questions when needed.',
+    'You prepare a Codex/Code handoff prompt.',
+    'Code mode remains the only place for project-file context, patch review, apply, checkpoint, restore, and verification.',
+    'Return strict JSON only matching the requested schema.',
+    'Do not include secrets, provider config, API keys, or full source content.',
+    'Do not include terminal commands as direct actions to run.',
+    'Treat these paths as unsafe and never recommend editing them: .env, token, password, credential, .git, node_modules, logs, uploads, database files, binary files, provider config files containing secrets.',
+    '',
+    'Required JSON schema:',
+    '{"goal":"string","currentUnderstanding":"string","clarifyingQuestions":["string"],"scope":["string"],"exclusions":["string"],"steps":[{"title":"string","status":"todo"}],"inspectFiles":["string"],"suggestedFiles":["string"],"avoidFiles":["string"],"risks":["string"],"verification":["string"],"nextAction":"string","codexPrompt":"string"}',
+    '',
+    'Cowork draft:',
+    `Goal:\n${draft.goal || 'none provided'}`,
+    '',
+    `Scope:\n${formatCoworkList(draft.scope)}`,
+    '',
+    `Exclusions:\n${formatCoworkList(draft.exclusions)}`,
+    '',
+    `Steps:\n${formatCoworkSteps(draft.steps)}`,
+    '',
+    `Files to inspect:\n${formatCoworkList(draft.inspectFiles)}`,
+    '',
+    `Suggested files:\n${formatCoworkList(draft.suggestedFiles)}`,
+    '',
+    `Files or paths to avoid:\n${formatCoworkList(draft.avoidFiles)}`,
+    '',
+    `Risks:\n${formatCoworkList(draft.risks)}`,
+    '',
+    `Verification:\n${formatCoworkList(draft.verification)}`,
+    '',
+    `Next action:\n${draft.nextAction || 'none provided'}`,
+  ].join('\n');
+}
+
+function unwrapCoworkJson(rawText = '') {
+  const text = String(rawText).trim();
+  const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) {
+    return fenced[1].trim();
+  }
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return text.slice(firstBrace, lastBrace + 1);
+  }
+  return text;
+}
+
+function hasSuspiciousCoworkPlannerContent(planner) {
+  const textParts = [
+    planner.goal,
+    planner.currentUnderstanding,
+    planner.nextAction,
+    planner.codexPrompt,
+    ...planner.clarifyingQuestions,
+    ...planner.scope,
+    ...planner.exclusions,
+    ...planner.inspectFiles,
+    ...planner.suggestedFiles,
+    ...planner.risks,
+    ...planner.verification,
+    ...planner.steps.map((step) => step.title),
+  ];
+  return textParts.some(isSuspiciousCoworkText);
+}
+
+function parseCoworkPlannerResponse(rawText = '') {
+  let parsed;
+  try {
+    parsed = JSON.parse(unwrapCoworkJson(rawText));
+  } catch {
+    const error = new Error('Cowork planner returned invalid JSON.');
+    error.status = 502;
+    throw error;
+  }
+
+  const planner = {
+    goal: sanitizeCoworkText(parsed.goal),
+    currentUnderstanding: sanitizeCoworkText(parsed.currentUnderstanding),
+    clarifyingQuestions: sanitizeCoworkList(parsed.clarifyingQuestions),
+    scope: sanitizeCoworkList(parsed.scope),
+    exclusions: sanitizeCoworkList(parsed.exclusions),
+    steps: sanitizeCoworkSteps(parsed.steps, true).map((step) => ({ ...step, status: 'todo' })),
+    inspectFiles: sanitizeCoworkList(parsed.inspectFiles),
+    suggestedFiles: sanitizeCoworkList(parsed.suggestedFiles),
+    avoidFiles: uniqueCoworkList([
+      ...sanitizeCoworkList(parsed.avoidFiles),
+      ...COWORK_DEFAULT_AVOID_FILES,
+    ]),
+    risks: sanitizeCoworkList(parsed.risks),
+    verification: sanitizeCoworkList(parsed.verification),
+    nextAction: sanitizeCoworkText(parsed.nextAction),
+    codexPrompt: sanitizeCoworkText(parsed.codexPrompt, MAX_COWORK_CODEX_PROMPT_LENGTH),
+  };
+
+  if (hasSuspiciousCoworkPlannerContent(planner)) {
+    const error = new Error('Cowork planner returned unsafe content.');
+    error.status = 422;
+    throw error;
+  }
+
+  return planner;
+}
+
+function prepareCoworkPlannerRequest(req, _res, next) {
+  const originalBody = req.body || {};
+  const draft = sanitizeCoworkDraft(originalBody);
+  const prompt = createCoworkPlannerPrompt(draft);
+  req.coworkPlannerDraft = draft;
+  req.body = {
+    endpoint: originalBody.endpoint,
+    endpointType: originalBody.endpointType,
+    model: originalBody.model,
+    spec: originalBody.spec,
+    agent_id: originalBody.agent_id,
+    chatProjectId: originalBody.chatProjectId,
+    text: prompt,
+    tools: [],
+    files: [],
+    manualSkills: [],
+    ephemeralAgent: {
+      ...(originalBody.ephemeralAgent ?? {}),
+      skills: false,
+    },
+  };
+  next();
+}
+
+function requireCoworkPlannerModelRouting(req, res, next) {
+  if (typeof req.body?.endpoint !== 'string' || !req.body.endpoint.trim()) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Cowork planner model routing is required.',
+      warnings: [],
+    });
+  }
+  next();
 }
 
 function normalizeRelativePath(value = '') {
@@ -1068,6 +1350,102 @@ async function readActivities(limit = MAX_ACTIVITY_ITEMS) {
     })
     .filter(Boolean);
 }
+
+router.post(
+  '/cowork/planner',
+  configMiddleware,
+  prepareCoworkPlannerRequest,
+  requireCoworkPlannerModelRouting,
+  moderateText,
+  useAgentEndpointOptionBuilder,
+  buildEndpointOption,
+  async (req, res) => {
+    const warnings = [];
+    try {
+      const prompt = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      if (!prompt) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Cowork planner draft is required.',
+          warnings,
+        });
+      }
+
+      if (Buffer.byteLength(prompt, 'utf8') > MAX_COWORK_PLANNER_PROMPT_BYTES) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Cowork planner request is too large.',
+          warnings,
+        });
+      }
+
+      const conversationId = `cowork-planner-${randomUUID()}`;
+      const userMessageId = randomUUID();
+      const responseMessageId = randomUUID();
+      const now = new Date().toISOString();
+      const endpointOption = req.body?.endpointOption;
+      const abortController = new AbortController();
+
+      const { client, userMCPAuthMap } = await initializeClient({
+        req,
+        res: silentModelResponse,
+        signal: abortController.signal,
+        endpointOption,
+      });
+
+      client.conversationId = conversationId;
+      client.parentMessageId = userMessageId;
+      client.responseMessageId = responseMessageId;
+      client.user = req.user.id;
+
+      const payload = [
+        {
+          messageId: userMessageId,
+          parentMessageId: Constants.NO_PARENT,
+          conversationId,
+          text: prompt,
+          sender: 'User',
+          isCreatedByUser: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+
+      const { completion } = await client.sendCompletion(payload, {
+        abortController,
+        userMCPAuthMap,
+      });
+      const text = extractCompletionText(completion);
+
+      if (!text) {
+        return res.status(502).json({
+          ok: false,
+          error: 'Cowork planner returned an empty response.',
+          warnings,
+        });
+      }
+
+      const planner = parseCoworkPlannerResponse(text);
+      return res.json({
+        ok: true,
+        planner,
+        warnings,
+      });
+    } catch (error) {
+      const status = error?.status || error?.response?.status || 500;
+      const message = getSafeCoworkPlannerErrorMessage(error);
+      logger.error('[cowork-planner] request failed', {
+        status,
+        message,
+      });
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        ok: false,
+        error: message,
+        warnings,
+      });
+    }
+  },
+);
 
 router.post(
   '/source-chat',
