@@ -9,10 +9,10 @@ This file summarizes the custom Code mode work completed in this LibreChat-based
 Build a Claude-like open source AI workspace on top of LibreChat with:
 
 - Chat as the main AI conversation surface.
-- Manual Cowork for planning/workflow.
+- Cowork as a read-only AI planning workspace, task brief builder, scope controller, and Code/Codex prompt builder.
 - Code for safe project-file context and AI-assisted patch review/apply.
 
-Manual Cowork is now complete for the current scope. Auto Cowork/Code remains deferred. The next major product area is NotebookLM-style Sources core, without Studio outputs.
+Manual Cowork is complete for the current scope. The next Cowork direction is `Phase CW-1 - Read-only Cowork AI Planner`: AI may help think, plan, ask clarifying questions, and prepare Code/Codex handoff prompts, but must not edit files, run commands, apply patches, or act autonomously. Auto Code and autonomous file-changing flows remain deferred.
 
 ## Current Local App
 
@@ -35,7 +35,7 @@ Sensitive provider/API config lives in local config and must not be printed or c
   - Code mode UI: Files, Changes, History.
   - File preview, selected context, patch review, apply confirmation, verification display.
 - `client/src/components/Workspace/CoworkPanel.tsx`
-  - Cowork planning workspace with Goal, Scope, Plan, Files, Risks, Verification, Next Action, prompt handoff, file-context guidance, and local draft persistence.
+  - Cowork planning workspace with Goal, Scope, Plan, Files, Risks, Verification, Next Action, prompt handoff, file-context guidance, and local draft persistence. Target direction: read-only AI Planner / Task Brief Builder / Scope Controller / Code prompt builder.
 - `client/src/components/Workspace/WorkspaceModeTabs.tsx`
   - Chat/Cowork/Code mode tabs. Sources/Notebook is no longer a main workspace tab.
 - `client/src/components/Workspace/SourcesPanel.tsx`
@@ -209,77 +209,89 @@ Current chat scope:
 - Notebook data remains scoped by current conversation id with `Constants.NEW_CONVO` migration into the real conversation id after first send.
 - Persistence remains browser localStorage only. There is no backend DB/API persistence, vector DB/RAG, embeddings, semantic search, clickable citations in normal Chat, Studio, Auto, Workspace Room, Skill loader, full Skill system, or Slash Command Palette.
 - `/source` remains the deterministic fallback for guaranteed source grounding; auto Notebook grounding remains lightweight heuristic keyword/chunk matching.
-- Do not start Cowork Auto, Code Auto, Studio outputs, crawler/OCR, Google Drive sync, or a heavy vector database/RAG pipeline.
+- Next recommended phase: `Phase CW-1 - Read-only Cowork AI Planner`. Scope: add/prepare Cowork AI planning behavior with structured output, copyable Code/Codex prompt, and user confirmation before moving to Code. No file writes, patch apply, terminal commands, backend write routes, agents, or autonomous mode.
+- `Phase CW-0 Audit` is optional, but not required before CW-1 if the user wants to proceed directly.
+- Do not start autonomous Cowork, Code Auto, Studio outputs, crawler/OCR, Google Drive sync, or a heavy vector database/RAG pipeline.
 
 Do not start this yet unless requested:
 
-- Auto Cowork or Auto Code.
+- Autonomous Cowork or Auto Code.
 - Studio outputs such as Audio overview, Slides, Video, Mind map, Report, Flashcards, Quiz, Infographic, or Table.
 - Broad autonomous agent behavior.
 
-Manual Cowork is complete for the current scope. Code mode remains the only path for project-file context, patch review, apply, checkpoints, restore, and verification.
+Manual Cowork is complete for the current scope. Cowork may evolve into a read-only AI planner, but Code mode remains the only path for project-file context, patch review, apply, checkpoints, restore, and verification.
 
 ## Cowork Mode Plan
 
-Cowork is the next major workflow after Code mode. The reference behavior is Claude-style planning and collaboration: the user talks in Chat, Cowork turns the request into a concrete plan, and Code remains the only path that can prepare or apply file changes.
+Cowork is the read-only planning brain between Chat and Code. The reference behavior is Claude-style planning and collaboration: the user can start with a rough task, Cowork AI helps understand it, asks clarifying questions when needed, turns it into a scoped task brief, and prepares a Code/Codex handoff prompt. Code remains the only path that can inspect project-file content, review patches, apply changes, create checkpoints, restore files, and run verification.
 
 ### Goal
 
-Cowork should become the planning layer between Chat and Code:
+Cowork target role:
 
-- Clarify what the user wants before touching files.
-- Split large work into small, reviewable steps.
-- Identify likely files and risks.
-- Prepare a safe prompt for AI diff generation.
-- Hand the user to Code mode for file context, patch review, apply, checkpoint, and verification.
+- Read-only AI Planner.
+- Task Brief Builder.
+- Scope Controller.
+- Codex/Code Prompt Builder.
 
-Cowork must not become a second code editor or a hidden automation layer.
+Cowork AI should help with:
 
-### Non-Goals For First Cowork Pass
+- Understanding the user task.
+- Asking clarification questions when requirements are missing.
+- Identifying missing requirements and scope boundaries.
+- Splitting large tasks into small phases.
+- Proposing likely files to inspect, without reading hidden file contents by itself.
+- Identifying risks, side effects, and verification needs.
+- Writing a structured plan.
+- Generating a Code/Codex handoff prompt.
+- Producing a manual test checklist.
+- Warning when the scope is too broad.
+
+Cowork must not become a second code editor, a terminal, or a hidden autonomous agent.
+
+### Non-Goals For Cowork AI
 
 - Do not add direct terminal execution from Cowork.
 - Do not let Cowork write, delete, rename, upload, or move files directly.
+- Do not let Cowork apply patches, create checkpoints, restore files, or run verification.
+- Do not let Cowork auto-fix code or promise that it changed files.
 - Do not build real-time multiplayer collaboration yet.
 - Do not start NotebookLM-style source/RAG workflows yet.
-- Do not add broad agent autonomy. Human confirmation remains required.
+- Do not add broad agent autonomy. Human confirmation remains required before moving to Code.
 
 ### Primary User Flow
 
-The first usable Cowork workflow should be:
+The target Cowork AI workflow should be:
 
 ```text
-Chat request -> Cowork plan -> user confirms scope -> choose files/context -> ask AI for diff -> Review in Code -> Apply with checkpoint -> Verify -> History
+Chat request -> Cowork AI task brief -> user confirms scope -> Code chooses/attaches files -> AI diff request if needed -> Review in Code -> Apply with checkpoint -> Verify -> History
 ```
 
 If a user starts directly in Cowork, the flow is:
 
 ```text
-Cowork request -> plan draft -> file/context suggestions -> user confirms -> Code mode handles patch work
+Cowork request -> read-only AI plan draft -> likely file suggestions -> user confirms -> Code mode handles file context and patch work
 ```
 
 ### Cowork UI Sections
 
 Keep headings in English and supporting explanations in Thai where useful.
 
-Recommended sections for the first implementation:
+Required Cowork AI output structure:
 
 - `Goal`
-  - One short statement of what the current task is trying to achieve.
-- `Scope`
-  - What is included.
-  - What is explicitly excluded.
-- `Plan`
-  - Ordered steps.
-  - Each step should have a checkable status such as `todo`, `doing`, `done`, or `blocked`.
-- `Files`
-  - Suggested files to inspect or attach.
-  - This should link users toward Code mode file context, not read hidden files by itself.
-- `Risks`
+- `Current understanding`
+- `Clarifying questions`
+  - Include only when needed. Prefer one or a small focused set.
+- `In scope`
+- `Out of scope`
+- `Likely files to inspect`
+  - Suggested paths only. Actual file preview/attachment stays in Code.
+- `Risks / side effects`
   - Known risks such as model diff quality, stale context, sensitive files, or build impact.
-- `Verification`
-  - Suggested checks after apply: Fast, Normal, Strict, build, readyz, or UI smoke.
-- `Next Action`
-  - The one action the user should take next, such as open Code, attach files, ask AI for diff, or review patch.
+- `Small phased plan`
+- `Codex/Code handoff prompt`
+- `Manual test checklist`
 
 Avoid long always-visible documentation panels. Use compact cards, disclosure sections, or tabbed subviews.
 
@@ -287,6 +299,8 @@ Avoid long always-visible documentation panels. Use compact cards, disclosure se
 
 - Cowork can suggest actions, but Code mode owns file browsing, patch review, apply, checkpoint, restore, and verification.
 - Cowork must not bypass the Code mode safety model.
+- Cowork AI must not edit files, apply patches, run terminal commands, delete/rename/move files, or act as a hidden autonomous agent.
+- Cowork AI must not promise that it changed files.
 - Cowork should never request or display secrets, API keys, `.env`, tokens, passwords, credentials, `.git`, `node_modules`, logs, uploads, or database files.
 - Before any file-changing step, Cowork must produce a human-readable plan and wait for user confirmation.
 - If the task is unclear, Cowork should ask one focused question instead of guessing.
@@ -294,12 +308,25 @@ Avoid long always-visible documentation panels. Use compact cards, disclosure se
 
 ### AI Prompt Strategy
 
-Cowork should help produce better model prompts. The prompt should:
+Cowork should help produce better planning and Code handoff prompts. The planning prompt should ask for:
 
 - State the goal.
-- List the relevant files attached from Code mode.
-- Say which file changes are in scope.
-- Ask for a unified diff only when the user is ready for Code mode.
+- Current understanding.
+- Clarifying questions, if needed.
+- In scope and out of scope.
+- Likely files to inspect.
+- Risks / side effects.
+- Small phased plan.
+- Codex/Code handoff prompt.
+- Manual test checklist.
+- A warning if the task is too broad.
+
+The Code handoff prompt should:
+
+- State the confirmed goal.
+- List files the user should inspect/attach in Code mode.
+- Say which file changes are in scope and out of scope.
+- Ask for a unified diff only after the user has moved to Code and selected file context.
 - Include the strict diff rules already used in Code mode:
   - return only unified diff
   - use latest attached file content as source of truth
@@ -309,9 +336,9 @@ Cowork should help produce better model prompts. The prompt should:
 
 For Qwen3.6 35B A3B Passport, apply the Thai-writing guard only to user-facing Thai explanations. Patch syntax and code must stay exact.
 
-### Data Model For First Pass
+### Data Model For Read-only Planner Draft
 
-A simple frontend-only Cowork draft is enough for the first pass. Suggested shape:
+A simple frontend-only Cowork draft can still back the read-only planner output. Suggested shape:
 
 ```ts
 type CoworkDraft = {
@@ -330,7 +357,7 @@ type CoworkDraft = {
 };
 ```
 
-Persisting Cowork drafts can come later. First pass can use React state unless the user asks for saved project plans.
+Persisting Cowork drafts can come later. CW-1 can use the existing local draft path unless the user asks for saved project plans.
 
 ### Integration With Existing Code Mode
 
@@ -343,26 +370,29 @@ Reuse what already works:
 
 Cowork should point to these workflows instead of duplicating them.
 
-### First Implementation Slice
+### Next Implementation Slice
 
-Recommended first coding slice:
+`Phase CW-1 - Read-only Cowork AI Planner`
 
-1. Replace the current static `CoworkPanel` content with a compact plan workspace.
-2. Add editable/clearable Cowork draft fields for Goal, Scope, Plan, Files, Risks, Verification, and Next Action.
-3. Add a `Copy plan prompt` action that copies a structured planning prompt for the current chat model.
-4. Add a `Send diff prompt to Chat` or `Prepare diff request` action only after the plan has at least one suggested file.
-5. Keep all actions read-only. No backend write route should be added for Cowork in this slice.
+Scope:
+
+- Add or prepare Cowork AI planning behavior.
+- Keep all outputs structured.
+- Let Cowork ask clarifying questions, identify scope, likely files, risks, phased plan, handoff prompt, and manual test checklist.
+- Add/carry a copyable Codex/Code handoff prompt.
+- Require user confirmation before moving to Code.
+- Keep all actions read-only. No backend write route, file write, patch apply, terminal command, agent mode, or autonomous apply should be added.
+
+`Phase CW-0 Audit` is optional, but not required before CW-1 if the user wants to proceed directly.
 
 ### Cowork Roadmap
 
-Phase 1: Cowork first slice
+Phase CW-1: Read-only Cowork AI Planner
 
-- Build a compact frontend-only planning workspace in `CoworkPanel`.
-- Support editable `Goal`, `Scope`, `Plan`, `Files`, `Risks`, `Verification`, and `Next Action`.
-- Add `Copy plan prompt`.
-- Add `Prepare diff request` as a read-only prompt action that requires at least one suggested file.
-- Do not persist drafts, add backend routes, or write files from Cowork.
-- Suggested commit after verification: `Add cowork planning workspace`.
+- Add read-only Cowork AI planning behavior.
+- Structured output: Goal, Current understanding, Clarifying questions, In scope, Out of scope, Likely files to inspect, Risks / side effects, Small phased plan, Codex/Code handoff prompt, Manual test checklist.
+- No file writes, patch apply, terminal commands, backend write routes, agents, or autonomous behavior.
+- Suggested commit after verification: `Add read-only cowork AI planner`.
 
 Phase 2: Chat handoff polish
 
@@ -407,25 +437,25 @@ Phase 6: Advanced Cowork
 - Current implementation also simplifies the primary Cowork surface around Goal, Next Action, Plan, and readiness. Scope, Files, Risks, Verification, and prompt tools are available in collapsed details instead of filling the first view.
 - Current implementation adds Manual Cowork polish: `New plan` starts a blank safe draft, `Reset draft` restores a starter plan, reusable templates cover UI polish, bug fix, refactor, test update, and docs update, the empty state explains the manual workflow, and the readiness checklist names the next missing field.
 
-### Cowork Auto Roadmap
+### Future Guarded Automation Roadmap
 
-This roadmap is for a new chat after Manual Cowork is stable. Do not start these automation phases while finishing the current Manual Cowork scope.
+This roadmap is deferred future work, not the CW-1 target. CW-1 is read-only AI planning only. Do not start autonomous automation phases while implementing the read-only Cowork AI Planner.
 
-Cowork auto should mean assisted planning, context preparation, diff preparation, and guarded handoff. It must not mean silent file writes. Code mode remains the only owner of file browsing, patch review, apply, checkpoint, restore, and verification.
+Future Cowork automation, if ever approved, should mean assisted planning, context preparation, diff preparation, and guarded handoff. It must not mean silent file writes. Code mode remains the only owner of file browsing, patch review, apply, checkpoint, restore, and verification.
 
 #### Automation Levels
 
-Level 0: Manual Cowork
+Level 0: Current Manual Cowork
 
 - Current state.
 - User edits Goal, Next Action, Plan, Details, and Prompt Handoff manually.
 - Cowork can copy prompts and open Code.
 - No backend route, file read, file attach, patch apply, checkpoint, restore, or verification action is initiated by Cowork.
 
-Level 1: Assisted Planning
+Level 1: Read-only AI Planning
 
-- Cowork can ask Chat/model to draft or refine a plan from the user's request.
-- Output must be structured into Goal, Scope, Plan, Files, Risks, Verification, and Next Action.
+- Cowork can ask the current model to draft or refine a plan from the user's request.
+- Output must be structured into Goal, Current understanding, Clarifying questions, In scope, Out of scope, Likely files to inspect, Risks / side effects, Small phased plan, Code/Codex handoff prompt, and Manual test checklist.
 - User must accept or edit the plan before file-changing work can continue.
 - If the request is unclear, Cowork asks one focused clarification question instead of guessing.
 
@@ -835,19 +865,20 @@ Bad first task class:
 
 ### Acceptance Criteria
 
-Cowork first pass is acceptable when:
+Phase CW-1 is acceptable when:
 
 - The tab is useful without reading long instructions.
-- The user can see the current goal and next action at a glance.
-- The user can turn a rough request into a scoped plan.
-- Cowork can produce a prompt that asks AI for a plan or for a diff safely.
+- The user can turn a rough request into a structured task brief.
+- Cowork AI can think, plan, ask focused clarification questions, identify scope, suggest likely files to inspect, identify risks, create a phased plan, and prepare a Code/Codex handoff prompt.
+- Cowork can produce a manual test checklist.
 - Cowork does not write files directly.
+- Cowork does not run terminal commands, apply patches, create checkpoints, restore files, or promise that it changed files.
 - Code mode still owns diff review/apply/checkpoint/verification.
 - The app builds and `/readyz` returns `OK`.
 
 ### Later Cowork Enhancements
 
-After the first pass:
+After CW-1:
 
 - Save Cowork plans per conversation/project.
 - Add task status history.
