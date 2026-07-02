@@ -212,10 +212,13 @@ Current chat scope:
 - Persistence remains browser localStorage only. There is no backend DB/API persistence, vector DB/RAG, embeddings, semantic search, clickable citations in normal Chat, Studio, Auto, Workspace Room, Skill loader, full Skill system, or Slash Command Palette.
 - `/source` remains the deterministic fallback for guaranteed source grounding; auto Notebook grounding remains lightweight heuristic keyword/chunk matching.
 - Manual/form-first Cowork planner work is complete for the current scope. `Ask Cowork AI`, the planner endpoint, plan preview, `Accept Plan`, `Copy Codex Prompt`, local Cowork Plan History, `New Plan` / `Reset Draft` archive-before-clear behavior, and progressive-disclosure UI cleanup are present.
-- The next real Cowork phase is `CW-1B - Chat-first Cowork`. Convert Cowork from a form-first planner UI into a task-focused chat/result-first surface.
-- Keep existing Goal, Plan, Details, Prompt Handoff, Ready checklist, and History structures as internal or Advanced support. Do not delete them, but do not let them dominate the main Cowork surface.
+- CW-1B is no longer just "make `CoworkPanel` chat-like." The target is a separate Cowork Chat mode: Cowork rooms/projects/task history on the left, and a dedicated right-side `CoworkChatView` that is separate from normal `ChatView`.
+- Current CW-1B.1 started an interim sidebar-only task prompt/result-first shell. It may be reused conceptually, but it is insufficient as the final architecture because it does not create a separate right-side Cowork chat surface and normal Chat still owns the conversation/messages on the right.
+- Cowork messages must be separate from normal Chat conversations and must not pollute normal Chat history. Avoid reusing the normal conversation model in the early phase unless filtering and routing are explicitly designed.
+- Use frontend-only Cowork rooms/messages in `localStorage` first for the MVP. Later, move to a backend Cowork rooms/messages API when the UI contract is stable.
+- Existing Goal, Plan, Details, Prompt Handoff, Ready checklist, planner preview, and History logic should be reused as internal or Advanced support inside Cowork Chat, not kept as the main user surface. Do not continue growing form-heavy Cowork UI.
 - CW-1B must include cleanup/migration for stale old current-plan state: archive a meaningful current plan into History before clearing stale current state, clear/migrate old planner preview, accepted state, stale Codex prompt, Prompt Handoff state, and obsolete expanded/collapsed UI state. Do not delete Cowork History automatically.
-- `COWORK_ROADMAP.md` is the dedicated source of truth for CW-1B Chat-first Cowork, CW-1C Hidden Multi-step Reasoning, CW-2 File-aware Cowork, CW-3 Cowork Sandbox, CW-4 Sandbox Diff Preview, CW-5 Apply through Code mode, and the Adaptive Cowork Output Modes backlog.
+- `COWORK_ROADMAP.md` is the dedicated source of truth for CW-1B Separate Cowork Chat Mode, CW-1C Hidden Multi-step Reasoning, CW-2 File-aware Cowork, CW-3 Cowork Sandbox, CW-4 Sandbox Diff Preview, CW-5 Apply through Code mode, future restricted terminal/tool adapters, and the Adaptive Cowork Output Modes backlog.
 - Do not start autonomous Cowork, Code Auto, Studio outputs, crawler/OCR, Google Drive sync, or a heavy vector database/RAG pipeline.
 
 Do not start this yet unless requested:
@@ -224,23 +227,24 @@ Do not start this yet unless requested:
 - Studio outputs such as Audio overview, Slides, Video, Mind map, Report, Flashcards, Quiz, Infographic, or Table.
 - Broad autonomous agent behavior.
 
-Manual Cowork is complete for the current scope. Cowork is pivoting from a form-first planner into a chat-first task workspace. Code mode remains the only path for real project-file context, patch review, apply, checkpoints, restore, and verification.
+Manual Cowork is complete for the current scope. Cowork is pivoting from a form-first planner into a separate chat mode for work/action tasks. Code mode remains the only path for real project-file context, patch review, apply, checkpoints, restore, and verification.
 
 ## Cowork Mode Plan
 
-Cowork is the task-focused planning and collaboration brain between Chat and Code. The reference behavior is Claude-style cowork/project work: the user can start with a rough task in a chat-like surface, Cowork AI helps understand it, asks clarifying questions when needed, turns it into a scoped task brief, and prepares a Code/Codex handoff prompt. Code remains the only path that can inspect real project-file content, review patches, apply changes, create checkpoints, restore files, and run verification.
+Cowork is the task-focused work/action mode between Chat and Code. The reference behavior is Claude-style project work: the user starts in a dedicated Cowork room, Cowork AI helps understand the task, asks clarifying questions when needed, turns it into a scoped task brief, and prepares a Code/Codex handoff prompt. Code remains the only path that can inspect real project-file content, review patches, apply changes, create checkpoints, restore files, and run verification.
 
 ### Latest Role Split
 
-- `Chat`: general conversation.
-- `Cowork`: task-focused AI cowork chat. It can discuss the task, analyze user-provided context, plan, ask clarifying questions, create handoff prompts, and later work with explicitly attached/sandboxed files. It must not directly mutate the real repo.
-- `Code`: the only real file-operation path. Code mode handles real file context, diff review, patch apply, checkpoint, rollback, and verification.
+- `Chat`: knowledge/information mode. It owns normal conversation, Notebook/Sources, reading and organizing information, source Q&A, notes, and references. It is not the place for direct machine, file, or tool action.
+- `Cowork`: work/action mode. It owns task-focused AI cowork chat, separate Cowork rooms/projects, work planning, requirement expansion, handoff generation, future hidden multi-step reasoning, future verifier/review passes, future selected-file analysis, future sandboxed workflows, and future restricted terminal/tool adapters. It must operate through safety boundaries, previews, approvals, sandbox/tool adapters, and must not directly mutate the real repo or user machine.
+- `Code`: safe file apply mode. It owns real repo file context, diff review, patch apply, checkpoint, rollback, and verification.
 
 ### Goal
 
 Cowork target role:
 
 - Task-focused AI cowork chat.
+- Separate Cowork rooms/projects/task history.
 - Read-only AI planner.
 - Task brief builder.
 - Scope controller.
@@ -259,15 +263,18 @@ Cowork AI should help with:
 - Producing a manual test checklist.
 - Warning when the scope is too broad.
 
-Cowork must not become a second code editor, a terminal, or a hidden autonomous agent.
+Cowork must not become a second code editor, an unrestricted terminal, or a hidden autonomous agent.
 
-Do not continue growing the current form-heavy Cowork UI. Future UI should be chat-first and result-first. Goal, Plan, Details, Prompt Handoff, Ready checklist, planner preview, and history should become internal/advanced support rather than the main surface.
+Do not continue growing the current form-heavy Cowork UI. Future UI should be a separate Cowork Chat surface, with rooms/projects on the left and `CoworkChatView` on the right. Goal, Plan, Details, Prompt Handoff, Ready checklist, planner preview, and history should become internal/advanced support rather than the main surface.
 
 ### Non-Goals For Cowork AI
 
 - Do not add direct terminal execution from Cowork.
 - Do not let Cowork write, delete, rename, upload, or move files directly.
 - Do not let Cowork apply patches, create checkpoints, restore files, or run verification.
+- Do not let Cowork control external tools without explicit tool adapter boundaries, permissions, previews, and approvals.
+- Do not send normal Chat history into Cowork context by default.
+- Do not send Cowork History into AI context by default unless intentionally designed later.
 - Do not let Cowork auto-fix code or promise that it changed files.
 - Do not build real-time multiplayer collaboration yet.
 - Do not start NotebookLM-style source/RAG workflows yet.
@@ -292,18 +299,24 @@ Future Cowork file workflow:
 11. Applying to the real repo must go through Code mode only.
 12. Code mode must use checkpoint, manual approval, rollback, and verify.
 
+Future Cowork action/tool workflow:
+
+```text
+Cowork Chat -> selected context/files -> sandbox or tool adapter -> preview -> user approval -> Code/apply/export/save path as appropriate
+```
+
 ### Primary User Flow
 
 The target Cowork AI workflow should be:
 
 ```text
-Chat request -> Cowork AI task brief -> user confirms scope -> Code chooses/attaches files -> AI diff request if needed -> Review in Code -> Apply with checkpoint -> Verify -> History
+Chat knowledge/reference work -> Cowork task room when action is needed -> Cowork AI task brief -> user confirms scope -> Code chooses/attaches files when repo changes are needed -> AI diff request if needed -> Review in Code -> Apply with checkpoint -> Verify -> History
 ```
 
 If a user starts directly in Cowork, the flow is:
 
 ```text
-Cowork request -> read-only AI plan draft -> likely file suggestions -> user confirms -> Code mode handles file context and patch work
+Cowork room request -> Cowork-only task conversation/result -> read-only AI plan draft -> likely file suggestions -> user confirms -> Code mode handles real repo file context and patch work
 ```
 
 ### Cowork UI Sections
@@ -371,9 +384,20 @@ For Qwen3.6 35B A3B Passport, apply the Thai-writing guard only to user-facing T
 
 Model expectation: Qwen3.6 35B can be used as the Cowork brain for task conversation, planning, file analysis when context is explicit, proposed edits, patch suggestions, and handoff prompt generation. It should not be trusted to directly mutate the real repo without sandbox and Code-mode safety gates.
 
-### Data Model For Read-only Planner Draft
+### Data Model For Cowork Rooms
 
-A simple frontend-only Cowork draft can still back the read-only planner output. Suggested shape:
+Avoid reusing the normal conversation model for Cowork in the early phase because it risks polluting normal Chat history. Start with frontend-only Cowork rooms/messages in `localStorage`, then move to a backend Cowork rooms/messages API when the UI contract is stable.
+
+Cowork rooms should store:
+
+- room title/project
+- Cowork-only messages/results
+- planner result
+- handoff prompt
+- advanced draft/details
+- history snapshots if useful
+
+A simple frontend-only Cowork draft can still back the read-only planner output inside each room. Suggested shape:
 
 ```ts
 type CoworkDraft = {
@@ -392,7 +416,7 @@ type CoworkDraft = {
 };
 ```
 
-Persisting Cowork drafts can come later. CW-1 can use the existing local draft path unless the user asks for saved project plans.
+Room persistence should stay local-only for the first MVP. Do not send normal Chat history or Cowork History into AI context by default.
 
 ### Integration With Existing Code Mode
 
@@ -407,12 +431,15 @@ Cowork should point to these workflows instead of duplicating them.
 
 ### Next Implementation Slice
 
-`CW-1B - Chat-first Cowork`
+`CW-1B - Separate Cowork Chat Mode`
 
 Scope:
 
-- Convert Cowork from the current form-first planner UI into a task-focused chat/result-first surface.
-- Keep Goal, Plan, Details, Prompt Handoff, Ready checklist, and History as internal or Advanced support.
+- Replace the sidebar-only Cowork planner direction with a separate Cowork Chat mode.
+- Desired architecture: Cowork rooms/projects/task history on the left, dedicated `CoworkChatView` on the right.
+- Cowork messages must be separate from normal Chat conversations and must not pollute normal Chat history.
+- Current CW-1B.1 sidebar task prompt/result-first shell is interim and insufficient as the final target.
+- Keep Goal, Plan, Details, Prompt Handoff, Ready checklist, and History as internal or Advanced support inside Cowork Chat.
 - Add a safe current-state cleanup/migration path so stale planner state from the old UI does not reappear after the pivot.
 - Archive meaningful non-empty current plans into Cowork History before clearing stale current state.
 - Keep Cowork read-only for real project files. Cowork must not directly edit repo files, run arbitrary terminal commands, apply patches, create checkpoints, restore files, or bypass Code mode.

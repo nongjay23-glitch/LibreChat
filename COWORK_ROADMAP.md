@@ -2,33 +2,48 @@
 
 ## Product Direction
 
-Cowork should become a chat-first AI cowork workspace.
+Cowork should become a separate chat mode for work/action tasks, not just a chat-like panel inside the normal Chat layout.
 
 Main idea:
 
-- User writes a short task prompt.
-- Cowork thinks through the task.
-- Cowork returns result-first output.
-- Advanced details are available only when needed.
+- User enters a Cowork room/project.
+- User writes a short task prompt in a dedicated Cowork Chat surface.
+- Cowork thinks through the task and returns result-first output.
+- Advanced planner/details are available only when needed.
 - Code mode remains the only real apply path.
 
-Cowork is no longer intended to grow as a large form-heavy planner UI. Existing Goal, Plan, Details, Prompt Handoff, Ready checklist, and History structures should become the internal planning engine, advanced inspector, history backup, and Code handoff support. They should not dominate the main Cowork surface.
+Cowork is no longer intended to grow as a large form-heavy planner UI or a sidebar-only chat-like shell. Existing Goal, Plan, Details, Prompt Handoff, Ready checklist, and History structures should become the internal planning engine, advanced inspector, history backup, and Code handoff support inside Cowork Chat. They should not dominate the main Cowork surface.
 
 ## Role Split
 
 Chat:
 
-- General conversation.
+- Knowledge / information mode.
+- Normal conversation.
+- Notebook/Sources.
+- Reading and organizing information.
+- Source Q&A.
+- Notes and references.
+- Not the place for direct machine, file, or tool action.
 
 Cowork:
 
-- Task-focused AI cowork chat.
+- Work / action mode.
+- Separate Cowork rooms/projects/task history.
+- Task-focused AI cowork chat with Cowork-only messages.
 - Planning, requirement expansion, analysis, clarification, handoff generation.
+- Hidden multi-step reasoning later.
+- Verifier/review pass later.
 - Later: read/analyze explicitly attached files.
 - Later: propose sandbox edits.
+- Later: restricted terminal/tool adapters.
+- Later: external tool adapters such as Excel, Figma, and other local programs.
+- Must operate through safety boundaries, approvals, sandbox/tool adapters, and previews.
+- Must not directly mutate the real repo or user machine.
 
 Code:
 
+- Safe file apply mode.
 - Real file context.
 - Diff review.
 - Patch apply.
@@ -73,40 +88,107 @@ But:
   - sandbox boundary
   - Code mode apply gate
 
-## CW-1B - Chat-first Cowork
+## CW-1B - Separate Cowork Chat Mode
 
 Goal:
 
-Convert Cowork from form-first planner UI into a task-focused chat/result-first surface.
+Convert Cowork from form-first/sidebar-only planner UI into a separate Cowork Chat mode.
 
-Main screen should show:
+Target layout:
 
-- Cowork chat input
-- conversation/result area
-- main answer/result card
-- next action
-- Copy Prompt
-- Send/Prepare for Code
-- Show Details
-- History entry
+Chat mode:
 
-Move behind Advanced/Details:
+- Left side: normal Chat history / projects / conversations.
+- Right side: normal Chat AI conversation.
+- Purpose: knowledge/reference work, Notebook/Sources, source Q&A, notes, and normal conversation.
 
-- Goal
-- Scope
-- Plan
-- Details
-- Prompt Handoff
-- Ready checklist
-- Templates
-- Risks
-- Verification
+Cowork mode:
+
+- Left side: Cowork rooms / Cowork projects / Cowork task history.
+- Right side: dedicated `CoworkChatView`.
+- Purpose: work/action mode, project work, task execution planning, tool orchestration, local work, sandboxed file workflows, and future terminal/tool adapters.
+- Cowork messages must be separate from normal Chat messages.
+- Cowork must not pollute normal Chat history.
+
+Code mode:
+
+- Safe file operation workspace.
+- Real project file context.
+- Diff review.
+- Patch apply.
+- Checkpoint.
+- Rollback.
+- Verification.
 
 Important:
 
 - Do not delete existing planner/history/checklist structures.
-- Convert them into internal/advanced support.
+- Convert them into internal/advanced support inside Cowork Chat.
+- Do not keep growing form-heavy Cowork UI.
 - Do not allow direct file edits in CW-1B.
+- Code mode remains the only real apply/checkpoint/rollback/verify path.
+
+CW-1B.1 status:
+
+- Sidebar task prompt/result-first shell started with a task prompt mapped to the existing Goal field.
+- Planner preview now prioritizes result, next action, clarifying questions, and Codex/Code prompt copy.
+- Structured planner fields, Ready checklist, Prompt Handoff, templates, and History remain available as Advanced/internal support.
+- No backend planner endpoint, localStorage schema, Chat, Notebook, Source, `/source`, Source AI Chat, or Code mode behavior changed.
+- This is interim and insufficient as the final architecture because it does not create a separate right-side Cowork chat surface.
+
+CW-1B.2 status:
+
+- Architecture audit completed.
+- Finding: current Cowork tab only changes the left sidebar panel. The right side remains normal `ChatView` and normal conversation/messages.
+- Decision direction: build separate Cowork rooms on the left and `CoworkChatView` on the right.
+
+CW-1B.3 - Documentation update for separate Cowork chat architecture:
+
+- Record the new Chat / Cowork / Code role split.
+- Record data separation and safety boundaries.
+- Record phased implementation path before more runtime changes.
+
+CW-1B.4 - Cowork mode shell:
+
+- Active Cowork mode should render a right-side `CoworkChatView` placeholder.
+- No AI changes yet.
+- No backend changes yet.
+- Preserve normal Chat behavior when Chat mode is active.
+
+CW-1B.5 - Local Cowork rooms:
+
+- Add frontend-only Cowork rooms/messages in `localStorage`.
+- Keep Cowork rooms separate from normal Chat history.
+- Left side becomes Cowork rooms/projects/task history.
+
+CW-1B.6 - CoworkChatView MVP:
+
+- User prompt goes to the existing planner endpoint.
+- Append planner result as a Cowork-only message/result.
+- Do not save Cowork messages into normal Chat conversations.
+
+CW-1B.7 - Move planner/result/details into CoworkChatView Advanced:
+
+- Reuse current planner/history/checklist/handoff logic.
+- Move Goal, Scope, Plan, Details, Prompt Handoff, Ready checklist, templates, risks, and verification behind Advanced inside Cowork Chat.
+
+CW-1B.8 - Cleanup old CoworkPanel usage:
+
+- `CoworkPanel` should become room/sidebar support or be replaced by `CoworkRoomsList`.
+- Do not discard useful planner/result/handoff logic; move it to the appropriate Cowork Chat layer.
+
+Data model recommendation:
+
+- Avoid reusing the normal conversation model for Cowork in the early phase because it risks polluting normal Chat history.
+- Use frontend-only Cowork rooms/messages in `localStorage` first for MVP.
+- Later move to a backend Cowork rooms/messages API when the UI contract is stable.
+- Cowork rooms should store:
+  - room title/project
+  - Cowork-only messages/results
+  - planner result
+  - handoff prompt
+  - advanced draft/details
+  - history snapshots if useful
 
 Cleanup/migration:
 
@@ -116,6 +198,12 @@ Cleanup/migration:
 - Do not delete History automatically.
 - Do not delete Chat, Notebook, Sources, or Code checkpoints.
 - Provide a clean path for the user to start with an empty Cowork Chat screen.
+
+Action/tool safety path:
+
+```text
+Cowork Chat -> selected context/files -> sandbox or tool adapter -> preview -> user approval -> Code/apply/export/save path as appropriate
+```
 
 ## CW-1C - Hidden Multi-step Cowork Reasoning
 
@@ -214,6 +302,53 @@ Rules:
 - Code mode supports rollback.
 - Cowork never applies directly.
 
+## CW-6 - Restricted Terminal Tool
+
+Goal:
+
+Allow limited terminal-assisted work only through explicit safety controls.
+
+Rules:
+
+- Command preview before execution.
+- Allowlist and/or policy checks.
+- User approval required.
+- No arbitrary unsupervised terminal.
+- No hidden background execution.
+- Terminal output should be summarized back into Cowork without granting Cowork real repo mutation powers.
+
+## CW-7 - External Tool Adapters
+
+Goal:
+
+Allow Cowork to help with external tools through explicit adapters instead of broad machine control.
+
+Initial adapter candidates:
+
+- Excel
+- Figma
+- Other local programs
+
+Rules:
+
+- Adapter-specific permissions.
+- Adapter-specific previews.
+- User approval before save/export/apply actions.
+- No unrestricted control of user programs.
+
+## CW-8 - Workflow Automation
+
+Goal:
+
+Support multi-step work only after the safety boundaries are proven.
+
+Rules:
+
+- Human approval gates between meaningful steps.
+- Clear activity history.
+- No broad autonomous agent behavior by default.
+- Code/apply/export/save actions must route through their appropriate safety path.
+
 ## Future Backlog - Adaptive Cowork Output Modes
 
 Goal:
@@ -231,6 +366,9 @@ Rules:
 - Do not grow form-heavy Cowork UI further.
 - Do not let Cowork directly edit real repo files.
 - Do not let Cowork run arbitrary terminal commands.
+- Do not let Cowork apply patches.
+- Do not let Cowork control external tools without explicit adapter boundaries.
+- Do not send normal Chat history into Cowork context by default.
 - Do not send Cowork History into AI context by default.
 - Do not delete user history without explicit action.
 - Do not expose raw hidden reasoning as main UI.
