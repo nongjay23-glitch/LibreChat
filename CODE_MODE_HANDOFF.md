@@ -211,8 +211,11 @@ Current chat scope:
 - Notebook data remains scoped by current conversation id with `Constants.NEW_CONVO` migration into the real conversation id after first send.
 - Persistence remains browser localStorage only. There is no backend DB/API persistence, vector DB/RAG, embeddings, semantic search, clickable citations in normal Chat, Studio, Auto, Workspace Room, Skill loader, full Skill system, or Slash Command Palette.
 - `/source` remains the deterministic fallback for guaranteed source grounding; auto Notebook grounding remains lightweight heuristic keyword/chunk matching.
-- Next recommended phase: `Phase CW-1 - Read-only Cowork AI Planner`. Scope: add/prepare Cowork AI planning behavior with structured output, copyable Code/Codex prompt, and user confirmation before moving to Code. No file writes, patch apply, terminal commands, backend write routes, agents, or autonomous mode.
-- `Phase CW-0 Audit` is optional, but not required before CW-1 if the user wants to proceed directly.
+- Manual/form-first Cowork planner work is complete for the current scope. `Ask Cowork AI`, the planner endpoint, plan preview, `Accept Plan`, `Copy Codex Prompt`, local Cowork Plan History, `New Plan` / `Reset Draft` archive-before-clear behavior, and progressive-disclosure UI cleanup are present.
+- The next real Cowork phase is `CW-1B - Chat-first Cowork`. Convert Cowork from a form-first planner UI into a task-focused chat/result-first surface.
+- Keep existing Goal, Plan, Details, Prompt Handoff, Ready checklist, and History structures as internal or Advanced support. Do not delete them, but do not let them dominate the main Cowork surface.
+- CW-1B must include cleanup/migration for stale old current-plan state: archive a meaningful current plan into History before clearing stale current state, clear/migrate old planner preview, accepted state, stale Codex prompt, Prompt Handoff state, and obsolete expanded/collapsed UI state. Do not delete Cowork History automatically.
+- `COWORK_ROADMAP.md` is the dedicated source of truth for CW-1B Chat-first Cowork, CW-1C Hidden Multi-step Reasoning, CW-2 File-aware Cowork, CW-3 Cowork Sandbox, CW-4 Sandbox Diff Preview, CW-5 Apply through Code mode, and the Adaptive Cowork Output Modes backlog.
 - Do not start autonomous Cowork, Code Auto, Studio outputs, crawler/OCR, Google Drive sync, or a heavy vector database/RAG pipeline.
 
 Do not start this yet unless requested:
@@ -404,18 +407,18 @@ Cowork should point to these workflows instead of duplicating them.
 
 ### Next Implementation Slice
 
-`Phase CW-1 - Read-only Cowork AI Planner`
+`CW-1B - Chat-first Cowork`
 
 Scope:
 
-- Add or prepare Cowork AI planning behavior.
-- Keep all outputs structured.
-- Let Cowork ask clarifying questions, identify scope, likely files, risks, phased plan, handoff prompt, and manual test checklist.
-- Add/carry a copyable Codex/Code handoff prompt.
-- Require user confirmation before moving to Code.
-- Keep all actions read-only. No backend write route, file write, patch apply, terminal command, agent mode, or autonomous apply should be added.
+- Convert Cowork from the current form-first planner UI into a task-focused chat/result-first surface.
+- Keep Goal, Plan, Details, Prompt Handoff, Ready checklist, and History as internal or Advanced support.
+- Add a safe current-state cleanup/migration path so stale planner state from the old UI does not reappear after the pivot.
+- Archive meaningful non-empty current plans into Cowork History before clearing stale current state.
+- Keep Cowork read-only for real project files. Cowork must not directly edit repo files, run arbitrary terminal commands, apply patches, create checkpoints, restore files, or bypass Code mode.
+- Future file editing requires Cowork Sandbox, sandbox diff preview, explicit user approval, and Code mode apply/checkpoint/verify/rollback.
 
-`Phase CW-0 Audit` is optional, but not required before CW-1 if the user wants to proceed directly.
+See `COWORK_ROADMAP.md` for the detailed Cowork roadmap. Do not duplicate that full roadmap here.
 
 ### Cowork Roadmap
 
