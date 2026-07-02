@@ -13,11 +13,7 @@ const {
   EndpointURLs,
   EModelEndpoint,
 } = require('librechat-data-provider');
-const {
-  configMiddleware,
-  buildEndpointOption,
-  moderateText,
-} = require('~/server/middleware');
+const { configMiddleware, buildEndpointOption, moderateText } = require('~/server/middleware');
 const { initializeClient } = require('~/server/services/Endpoints/agents');
 const requireJwtAuth = require('~/server/middleware/requireJwtAuth');
 
@@ -64,12 +60,16 @@ const COWORK_DEFAULT_AVOID_FILES = [
   'binary files',
   'provider config files containing secrets',
 ];
-const COWORK_SECRET_PATTERN =
-  /\b(api[-_ ]?key|bearer\s+token|bearer|password|secret|credential)\b|-----BEGIN/i;
-const COWORK_COMMAND_PATTERN =
-  /(^|\n|\s)(npm|yarn|pnpm|node|python|pip|docker|git|curl|wget|rm|del|erase|powershell|pwsh|cmd|bash|sh|Invoke-WebRequest|Remove-Item|Move-Item|Copy-Item)\s+/i;
-const COWORK_EDIT_CLAIM_PATTERN =
-  /\b(I|I've|I have|we|we've|we have)\s+(edited|changed|modified|created|deleted|renamed|moved|applied|patched|ran|executed|updated)\b/i;
+/**
+ * Matches actual secret-like VALUES, not bare label words.
+ * Bare labels like "password", "token", ".env", "credential" are valid as
+ * avoidFiles / exclusion guidance and must NOT be rejected.
+ *
+ * Catches: api_key=..., Bearer <long>, -----BEGIN, password=<value>,
+ *          token=<value>, credential=<value>, long random API-key-like strings.
+ */
+const COWORK_SECRET_VALUE_PATTERN =
+  /-----BEGIN|\b(api[-_ ]?key|password|token|secret|credential)\s*[:=]\s*\S{6,}|\bBearer\s+[A-Za-z0-9_.\-]{20,}|\b(?:sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_\-]{12,}\b/i;
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -157,11 +157,7 @@ function extractCompletionText(completion = []) {
     return '';
   }
 
-  return completion
-    .map(getContentPartText)
-    .filter(Boolean)
-    .join('\n')
-    .trim();
+  return completion.map(getContentPartText).filter(Boolean).join('\n').trim();
 }
 
 function prepareSourceChatRequest(req, _res, next) {
@@ -201,11 +197,7 @@ function getSafeCoworkPlannerErrorMessage(error) {
 }
 
 function isSuspiciousCoworkText(value = '') {
-  return (
-    COWORK_SECRET_PATTERN.test(value) ||
-    COWORK_COMMAND_PATTERN.test(value) ||
-    COWORK_EDIT_CLAIM_PATTERN.test(value)
-  );
+  return COWORK_SECRET_VALUE_PATTERN.test(value);
 }
 
 function sanitizeCoworkText(value, maxLength = MAX_COWORK_STRING_LENGTH) {
@@ -213,7 +205,7 @@ function sanitizeCoworkText(value, maxLength = MAX_COWORK_STRING_LENGTH) {
     return '';
   }
   const trimmed = value.trim();
-  if (!trimmed || COWORK_SECRET_PATTERN.test(trimmed)) {
+  if (!trimmed || COWORK_SECRET_VALUE_PATTERN.test(trimmed)) {
     return '';
   }
   return trimmed.slice(0, maxLength);
@@ -256,10 +248,9 @@ function sanitizeCoworkSteps(value, outputOnly = false) {
       const status = typeof step?.status === 'string' ? step.status : 'todo';
       return {
         title,
-        status:
-          (outputOnly ? COWORK_OUTPUT_STEP_STATUSES : COWORK_STEP_STATUSES).has(status)
-            ? status
-            : 'todo',
+        status: (outputOnly ? COWORK_OUTPUT_STEP_STATUSES : COWORK_STEP_STATUSES).has(status)
+          ? status
+          : 'todo',
       };
     })
     .filter(Boolean)
@@ -391,7 +382,10 @@ function parseCoworkPlannerResponse(rawText = '') {
     clarifyingQuestions: sanitizeCoworkList(parsed.clarifyingQuestions),
     scope: sanitizeCoworkList(parsed.scope),
     exclusions: sanitizeCoworkList(parsed.exclusions),
-    steps: sanitizeCoworkSteps(parsed.steps, true).map((step) => ({ ...step, status: 'todo' })),
+    steps: sanitizeCoworkSteps(parsed.steps, true).map((step) => ({
+      ...step,
+      status: 'todo',
+    })),
     inspectFiles: sanitizeCoworkList(parsed.inspectFiles),
     suggestedFiles: sanitizeCoworkList(parsed.suggestedFiles),
     avoidFiles: uniqueCoworkList([
@@ -472,7 +466,10 @@ function resolveWritableWorkspacePath(relativePath = '') {
 
   const normalized = normalizeRelativePath(relativePath);
   const resolved = path.resolve(WORKSPACE_WRITE_ROOT, normalized);
-  if (resolved !== WORKSPACE_WRITE_ROOT && !resolved.startsWith(`${WORKSPACE_WRITE_ROOT}${path.sep}`)) {
+  if (
+    resolved !== WORKSPACE_WRITE_ROOT &&
+    !resolved.startsWith(`${WORKSPACE_WRITE_ROOT}${path.sep}`)
+  ) {
     throw new Error('Path is outside the writable workspace');
   }
   return { normalized, resolved };
@@ -507,7 +504,9 @@ function isBlocked(relativePath = '') {
 
   const fileName = parts[parts.length - 1] || '';
   const ext = path.extname(fileName).toLowerCase();
-  return BLOCKED_EXTENSIONS.has(ext) || BLOCKED_FILE_NAMES.some((pattern) => pattern.test(fileName));
+  return (
+    BLOCKED_EXTENSIONS.has(ext) || BLOCKED_FILE_NAMES.some((pattern) => pattern.test(fileName))
+  );
 }
 
 function isLikelyBinary(buffer) {
@@ -1057,7 +1056,9 @@ function getCommandErrorMessage(error) {
 
 function loadTypeScript() {
   try {
-    const typescriptPath = require.resolve('typescript', { paths: [WORKSPACE_WRITE_ROOT] });
+    const typescriptPath = require.resolve('typescript', {
+      paths: [WORKSPACE_WRITE_ROOT],
+    });
     return require(typescriptPath);
   } catch {
     return null;
@@ -1109,10 +1110,14 @@ async function verifyReadyz() {
       (response) => {
         response.resume();
         if (response.statusCode && response.statusCode >= 200 && response.statusCode < 300) {
-          resolve(createVerificationCheck('runtime readyz', 'passed', `HTTP ${response.statusCode}`));
+          resolve(
+            createVerificationCheck('runtime readyz', 'passed', `HTTP ${response.statusCode}`),
+          );
           return;
         }
-        resolve(createVerificationCheck('runtime readyz', 'failed', `HTTP ${response.statusCode || 0}`));
+        resolve(
+          createVerificationCheck('runtime readyz', 'failed', `HTTP ${response.statusCode || 0}`),
+        );
       },
     );
 
@@ -1129,7 +1134,9 @@ async function verifyReadyz() {
 async function verifyTextFile(normalized, resolved, options = {}) {
   const stats = await fs.stat(resolved).catch(() => null);
   if (!stats?.isFile()) {
-    return [createVerificationCheck(`${normalized}: file`, 'failed', 'File is missing after apply')];
+    return [
+      createVerificationCheck(`${normalized}: file`, 'failed', 'File is missing after apply'),
+    ];
   }
 
   if (stats.size > MAX_VERIFY_BYTES) {
@@ -1172,7 +1179,9 @@ async function verifyTextFile(normalized, resolved, options = {}) {
       });
       checks.push(createVerificationCheck(`${normalized}: syntax`, 'passed'));
     } catch (error) {
-      checks.push(createVerificationCheck(`${normalized}: syntax`, 'failed', getCommandErrorMessage(error)));
+      checks.push(
+        createVerificationCheck(`${normalized}: syntax`, 'failed', getCommandErrorMessage(error)),
+      );
     }
   }
 
@@ -1185,7 +1194,8 @@ async function verifyTextFile(normalized, resolved, options = {}) {
 
 async function verifyAppliedFiles(files, profile = 'fast') {
   const normalizedProfile = getVerificationProfile(profile);
-  const shouldCheckTypeScriptSyntax = normalizedProfile === 'normal' || normalizedProfile === 'strict';
+  const shouldCheckTypeScriptSyntax =
+    normalizedProfile === 'normal' || normalizedProfile === 'strict';
   const ts = shouldCheckTypeScriptSyntax ? loadTypeScript() : null;
   const checks = [];
   for (const file of files) {
@@ -1202,7 +1212,9 @@ async function verifyAppliedFiles(files, profile = 'fast') {
     await git(['diff', '--check', '--', ...files], { timeout: 15000 });
     checks.push(createVerificationCheck('git diff --check', 'passed'));
   } catch (error) {
-    checks.push(createVerificationCheck('git diff --check', 'failed', getCommandErrorMessage(error)));
+    checks.push(
+      createVerificationCheck('git diff --check', 'failed', getCommandErrorMessage(error)),
+    );
   }
 
   if (normalizedProfile === 'strict') {
@@ -1526,7 +1538,9 @@ router.post(
 router.get('/status', async (_req, res) => {
   try {
     const stats = await fs.stat(WORKSPACE_ROOT);
-    const writeStats = WORKSPACE_WRITE_ROOT ? await fs.stat(WORKSPACE_WRITE_ROOT).catch(() => null) : null;
+    const writeStats = WORKSPACE_WRITE_ROOT
+      ? await fs.stat(WORKSPACE_WRITE_ROOT).catch(() => null)
+      : null;
     return res.json({
       enabled: stats.isDirectory(),
       rootLabel: 'Project workspace',
@@ -1574,7 +1588,10 @@ router.post('/checkpoints/cleanup', async (req, res) => {
     const requestedKeep = Number(req.body?.keep ?? DEFAULT_CHECKPOINT_KEEP);
     const keep = Math.min(
       MAX_CHECKPOINT_KEEP,
-      Math.max(1, Number.isFinite(requestedKeep) ? Math.floor(requestedKeep) : DEFAULT_CHECKPOINT_KEEP),
+      Math.max(
+        1,
+        Number.isFinite(requestedKeep) ? Math.floor(requestedKeep) : DEFAULT_CHECKPOINT_KEEP,
+      ),
     );
     const checkpoints = await listCheckpointManifests(null);
     const deleted = [];
@@ -1625,7 +1642,9 @@ router.get('/tree', async (req, res, next) => {
     const entries = await fs.readdir(resolved, { withFileTypes: true });
     const visibleEntries = entries
       .filter((entry) => !isBlocked(path.posix.join(normalized, entry.name)))
-      .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
+      .sort(
+        (a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name),
+      )
       .slice(0, MAX_LIST_ITEMS);
 
     const items = await Promise.all(
@@ -1748,7 +1767,9 @@ router.post('/apply-patch', async (req, res, next) => {
       ? {
           profile: verificationProfile,
           status: 'skipped',
-          checks: [createVerificationCheck('post-apply verification', 'skipped', 'No file writes needed')],
+          checks: [
+            createVerificationCheck('post-apply verification', 'skipped', 'No file writes needed'),
+          ],
         }
       : await verifyAppliedFiles(parsed.files, verificationProfile);
 
@@ -1774,8 +1795,7 @@ router.post('/apply-patch', async (req, res, next) => {
       recoveredPatch,
       alreadyApplied,
       verification,
-      normalizedPatch:
-        normalizedPatchText !== patchText ? normalizedPatchText : undefined,
+      normalizedPatch: normalizedPatchText !== patchText ? normalizedPatchText : undefined,
     });
   } catch (error) {
     const message = error?.stderr || error?.message || 'Patch apply failed.';

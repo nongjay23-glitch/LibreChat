@@ -12,10 +12,13 @@ import {
   Plus,
   RotateCcw,
   ShieldCheck,
+  Sparkles,
   Target,
   Trash2,
+  X,
 } from 'lucide-react';
-import { useSetRecoilState } from 'recoil';
+import { request } from 'librechat-data-provider';
+import { useRecoilValue, useSetRecoilState } from 'recoil';
 import type { LucideIcon } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { TranslationKeys } from '~/hooks';
@@ -30,13 +33,7 @@ type PromptKind = 'plan' | 'diff' | 'verification' | 'handoff';
 type ReadinessStatus = 'planning' | 'needsFiles' | 'needsVerification' | 'readyForCode';
 type CoworkTemplateId = 'uiPolish' | 'bugFix' | 'refactor' | 'testUpdate' | 'docsUpdate';
 type CoworkTemplateField =
-  | 'goal'
-  | 'scope'
-  | 'exclusions'
-  | 'steps'
-  | 'risks'
-  | 'verification'
-  | 'nextAction';
+  'goal' | 'scope' | 'exclusions' | 'steps' | 'risks' | 'verification' | 'nextAction';
 
 type CoworkStep = {
   id: string;
@@ -69,6 +66,43 @@ type CoworkDraftCandidate = Partial<{
   verification: string[];
   nextAction: string;
 }>;
+
+type CoworkPlannerStep = {
+  title: string;
+  status: 'todo';
+};
+
+type CoworkPlannerResult = {
+  goal: string;
+  currentUnderstanding: string;
+  clarifyingQuestions: string[];
+  scope: string[];
+  exclusions: string[];
+  steps: CoworkPlannerStep[];
+  inspectFiles: string[];
+  suggestedFiles: string[];
+  avoidFiles: string[];
+  risks: string[];
+  verification: string[];
+  nextAction: string;
+  codexPrompt: string;
+};
+
+type CoworkPlannerResponse = {
+  ok?: boolean;
+  planner?: Partial<CoworkPlannerResult>;
+  warnings?: string[];
+  error?: string;
+};
+
+type RequestError = Error & {
+  response?: {
+    data?: {
+      error?: string;
+      message?: string;
+    };
+  };
+};
 
 type ListField = Exclude<keyof CoworkDraft, 'goal' | 'steps' | 'nextAction'>;
 type ReadinessItem = {
@@ -209,8 +243,13 @@ const createStepsFromText = (value: string) =>
 const formatList = (items: string[]) =>
   items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- TBD';
 
+/**
+ * Matches actual secret-like VALUES, not bare label words.
+ * Bare labels like "password", "token", ".env" are valid avoidFiles guidance.
+ * Only reject: key=value, Bearer <long>, -----BEGIN, long API-key-like strings.
+ */
 const sensitiveDraftPattern =
-  /\b(api[-_ ]?key|bearer|password|secret|token|credential)\b|-----BEGIN/i;
+  /-----BEGIN|\b(api[-_ ]?key|password|token|secret|credential)\s*[:=]\s*\S{6,}|\bBearer\s+[A-Za-z0-9_.\-]{20,}|\b(?:sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_\-]{12,}\b/i;
 
 const sanitizeDraftText = (value: string) =>
   sensitiveDraftPattern.test(value) ? '' : value.trim();
@@ -231,10 +270,7 @@ const getDraftList = (value: string[] | undefined, fallback: string[]) => {
 const isPlanStatus = (value: string | undefined): value is PlanStatus =>
   value ? statusOptions.includes(value as PlanStatus) : false;
 
-const getDraftSteps = (
-  value: Array<Partial<CoworkStep>> | undefined,
-  fallback: CoworkStep[],
-) => {
+const getDraftSteps = (value: Array<Partial<CoworkStep>> | undefined, fallback: CoworkStep[]) => {
   if (!Array.isArray(value)) {
     return fallback;
   }
@@ -246,10 +282,73 @@ const getDraftSteps = (
   }));
 };
 
-const normalizeStoredDraft = (
-  value: CoworkDraftCandidate,
-  fallback: CoworkDraft,
-): CoworkDraft => ({
+const getPlannerText = (value: string | undefined) =>
+  typeof value === 'string' ? sanitizeDraftText(value) : '';
+
+const getPlannerList = (value: string[] | undefined) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item) => (typeof item === 'string' ? sanitizeDraftText(item) : ''))
+    .filter(Boolean);
+};
+
+const getPlannerPathList = (value: string[] | undefined) => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean);
+};
+
+const normalizePlannerResult = (value: Partial<CoworkPlannerResult> = {}): CoworkPlannerResult => ({
+  goal: getPlannerText(value.goal),
+  currentUnderstanding: getPlannerText(value.currentUnderstanding),
+  clarifyingQuestions: getPlannerList(value.clarifyingQuestions),
+  scope: getPlannerList(value.scope),
+  exclusions: getPlannerList(value.exclusions),
+  steps: Array.isArray(value.steps)
+    ? value.steps
+        .map((step) => ({
+          title: getPlannerText(step?.title),
+          status: 'todo' as const,
+        }))
+        .filter((step) => step.title)
+    : [],
+  inspectFiles: getPlannerList(value.inspectFiles),
+  suggestedFiles: getPlannerList(value.suggestedFiles),
+  avoidFiles: getPlannerPathList(value.avoidFiles),
+  risks: getPlannerList(value.risks),
+  verification: getPlannerList(value.verification),
+  nextAction: getPlannerText(value.nextAction),
+  codexPrompt: getPlannerText(value.codexPrompt),
+});
+
+const createDraftFromPlanner = (planner: CoworkPlannerResult): CoworkDraft => ({
+  goal: planner.goal,
+  scope: planner.scope,
+  exclusions: planner.exclusions,
+  steps: planner.steps.map((step) => ({
+    id: createStepId(),
+    title: step.title,
+    status: 'todo',
+  })),
+  inspectFiles: planner.inspectFiles,
+  suggestedFiles: planner.suggestedFiles,
+  avoidFiles: planner.avoidFiles,
+  risks: planner.risks,
+  verification: planner.verification,
+  nextAction: planner.nextAction,
+});
+
+const getRequestErrorMessage = (error: unknown, fallback: string) => {
+  const requestError = error as RequestError;
+  return requestError?.response?.data?.error || requestError?.response?.data?.message || fallback;
+};
+
+const normalizeStoredDraft = (value: CoworkDraftCandidate, fallback: CoworkDraft): CoworkDraft => ({
   goal: getDraftText(value.goal, fallback.goal),
   scope: getDraftList(value.scope, fallback.scope),
   exclusions: getDraftList(value.exclusions, fallback.exclusions),
@@ -296,14 +395,14 @@ const createTemplateDraft = (
 const hasDraftContent = (draft: CoworkDraft) =>
   Boolean(
     draft.goal.trim() ||
-      draft.scope.length ||
-      draft.exclusions.length ||
-      draft.steps.some((step) => step.title.trim()) ||
-      draft.inspectFiles.length ||
-      draft.suggestedFiles.length ||
-      draft.risks.length ||
-      draft.verification.length ||
-      draft.nextAction.trim(),
+    draft.scope.length ||
+    draft.exclusions.length ||
+    draft.steps.some((step) => step.title.trim()) ||
+    draft.inspectFiles.length ||
+    draft.suggestedFiles.length ||
+    draft.risks.length ||
+    draft.verification.length ||
+    draft.nextAction.trim(),
   );
 
 const loadStoredDraft = () => {
@@ -373,7 +472,9 @@ const createPlanPrompt = (draft: CoworkDraft) =>
     '',
     `Plan:\n${
       draft.steps.length > 0
-        ? draft.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.title}`).join('\n')
+        ? draft.steps
+            .map((step, index) => `${index + 1}. [${step.status}] ${step.title}`)
+            .join('\n')
         : '1. [todo] TBD'
     }`,
     '',
@@ -660,17 +761,42 @@ function ActionButton({
   );
 }
 
+function PlannerPreviewList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border-light bg-surface-secondary p-2">
+      <div className="text-xs font-semibold text-text-primary">{title}</div>
+      {items.length > 0 ? (
+        <ul className="mt-1 list-disc space-y-1 pl-4 text-xs leading-5 text-text-secondary">
+          {items.map((item, index) => (
+            <li key={`${title}-${index}`}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <div className="mt-1 text-xs leading-5 text-text-tertiary">-</div>
+      )}
+    </div>
+  );
+}
+
 export default function CoworkPanel() {
   const localize = useLocalize();
   const { setActive } = useActivePanel();
+  const conversation = useRecoilValue(store.conversationByIndex(0));
   const setCoworkCodeHandoff = useSetRecoilState(store.coworkCodeHandoffByIndex(0));
   const promptPreviewRef = useRef<HTMLTextAreaElement | null>(null);
+  const plannerCodexPromptRef = useRef<HTMLTextAreaElement | null>(null);
   const [draft, setDraft] = useState<CoworkDraft>(() => loadStoredDraft());
   const [activePromptKind, setActivePromptKind] = useState<PromptKind>('plan');
   const [planCopyState, setPlanCopyState] = useState<CopyState>('idle');
   const [diffCopyState, setDiffCopyState] = useState<CopyState>('idle');
   const [verificationCopyState, setVerificationCopyState] = useState<CopyState>('idle');
   const [handoffCopyState, setHandoffCopyState] = useState<CopyState>('idle');
+  const [plannerPreview, setPlannerPreview] = useState<CoworkPlannerResult | null>(null);
+  const [plannerWarnings, setPlannerWarnings] = useState<string[]>([]);
+  const [plannerError, setPlannerError] = useState('');
+  const [isPlannerLoading, setIsPlannerLoading] = useState(false);
+  const [plannerCopyState, setPlannerCopyState] = useState<CopyState>('idle');
+  const [isPlannerAccepted, setIsPlannerAccepted] = useState(false);
 
   const planPrompt = useMemo(() => createPlanPrompt(draft), [draft]);
   const diffPrompt = useMemo(() => createDiffPrompt(draft), [draft]);
@@ -768,16 +894,123 @@ export default function CoworkPanel() {
 
   const startNewPlan = () => {
     replaceDraft(createEmptyDraft());
+    setPlannerPreview(null);
+    setPlannerWarnings([]);
+    setPlannerError('');
+    setIsPlannerAccepted(false);
+    setPlannerCopyState('idle');
   };
 
   const applyTemplate = (templateId: CoworkTemplateId) => {
     replaceDraft(createTemplateDraft(templateId, localize));
+    setPlannerPreview(null);
+    setPlannerWarnings([]);
+    setPlannerError('');
+    setIsPlannerAccepted(false);
+    setPlannerCopyState('idle');
   };
 
   const prepareForCode = () => {
     const handoff = createHandoffPayload(draft);
     setCoworkCodeHandoff(handoff);
     void copyText(handoff.summary, 'handoff');
+  };
+
+  const askCoworkAI = async () => {
+    if (isPlannerLoading) {
+      return;
+    }
+
+    if (!conversation?.endpoint) {
+      setPlannerError(localize('com_ui_cowork_planner_error'));
+      setPlannerWarnings([]);
+      return;
+    }
+
+    setPlannerError('');
+    setPlannerWarnings([]);
+    setPlannerPreview(null);
+    setIsPlannerAccepted(false);
+    setPlannerCopyState('idle');
+    setIsPlannerLoading(true);
+    try {
+      const data = (await request.post('/api/workspace/cowork/planner', {
+        goal: draft.goal,
+        scope: draft.scope,
+        exclusions: draft.exclusions,
+        steps: draft.steps.map(({ title, status }) => ({ title, status })),
+        inspectFiles: draft.inspectFiles,
+        suggestedFiles: draft.suggestedFiles,
+        avoidFiles: draft.avoidFiles,
+        risks: draft.risks,
+        verification: draft.verification,
+        nextAction: draft.nextAction,
+        endpoint: conversation.endpoint,
+        endpointType: conversation.endpointType,
+        model: conversation.model,
+        spec: conversation.spec,
+        agent_id: conversation.agent_id,
+        chatProjectId: conversation.chatProjectId,
+      })) as CoworkPlannerResponse;
+
+      if (!data?.ok || !data.planner) {
+        throw new Error(data?.error || localize('com_ui_cowork_planner_error'));
+      }
+
+      setPlannerPreview(normalizePlannerResult(data.planner));
+      setPlannerWarnings(getPlannerList(data.warnings));
+    } catch (error) {
+      setPlannerError(getRequestErrorMessage(error, localize('com_ui_cowork_planner_error')));
+    } finally {
+      setIsPlannerLoading(false);
+    }
+  };
+
+  const acceptPlannerPreview = () => {
+    if (!plannerPreview) {
+      return;
+    }
+    replaceDraft(createDraftFromPlanner(plannerPreview));
+    setIsPlannerAccepted(true);
+    setPlannerError('');
+    setPlannerCopyState('idle');
+  };
+
+  const discardPlannerPreview = () => {
+    setPlannerPreview(null);
+    setPlannerWarnings([]);
+    setIsPlannerAccepted(false);
+    setPlannerError('');
+    setPlannerCopyState('idle');
+  };
+
+  const copyPlannerCodexPrompt = async () => {
+    if (!plannerPreview?.codexPrompt) {
+      return;
+    }
+
+    if (copyTextFallback(plannerPreview.codexPrompt, plannerCodexPromptRef.current)) {
+      setPlannerCopyState('copied');
+      return;
+    }
+
+    try {
+      await writeClipboard(plannerPreview.codexPrompt);
+      setPlannerCopyState('copied');
+    } catch {
+      window.setTimeout(() => {
+        const promptPreview = plannerCodexPromptRef.current;
+
+        if (copyTextFallback(plannerPreview.codexPrompt, promptPreview)) {
+          setPlannerCopyState('copied');
+          return;
+        }
+
+        promptPreview?.focus();
+        promptPreview?.select();
+        setPlannerCopyState('selected');
+      }, 0);
+    }
   };
 
   const copyText = async (text: string, target: PromptKind) => {
@@ -816,7 +1049,12 @@ export default function CoworkPanel() {
   };
 
   const resetDraft = () => {
-    replaceDraft(createStarterDraft(localize));
+    replaceDraft(createEmptyDraft());
+    setPlannerPreview(null);
+    setPlannerWarnings([]);
+    setPlannerError('');
+    setIsPlannerAccepted(false);
+    setPlannerCopyState('idle');
   };
 
   const renderCopyLabel = (base: string, state: CopyState) => {
@@ -845,9 +1083,7 @@ export default function CoworkPanel() {
             <ShieldCheck className="h-5 w-5 text-green-500" aria-hidden="true" />
             <h2 className="text-base font-semibold">{localize('com_ui_cowork')}</h2>
           </div>
-          <p className="text-xs leading-5 text-text-secondary">
-            {localize('com_ui_cowork_intro')}
-          </p>
+          <p className="text-xs leading-5 text-text-secondary">{localize('com_ui_cowork_intro')}</p>
           <p className="mt-1 text-xs leading-5 text-text-tertiary">
             {localize('com_ui_cowork_saved_locally')}
           </p>
@@ -861,6 +1097,16 @@ export default function CoworkPanel() {
           <ActionButton onClick={resetDraft}>
             <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
             {localize('com_ui_cowork_reset')}
+          </ActionButton>
+          <ActionButton
+            variant="primary"
+            onClick={() => void askCoworkAI()}
+            disabled={isPlannerLoading}
+          >
+            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+            {isPlannerLoading
+              ? localize('com_ui_cowork_planner_loading')
+              : localize('com_ui_cowork_ask_ai')}
           </ActionButton>
           <ActionButton variant="primary" onClick={() => void copyText(planPrompt, 'plan')}>
             {planCopyState !== 'idle' ? (
@@ -916,6 +1162,141 @@ export default function CoworkPanel() {
           </div>
         ) : null}
       </div>
+
+      {plannerError ? (
+        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" aria-hidden="true" />
+          <span>{plannerError}</span>
+        </div>
+      ) : null}
+
+      {plannerPreview ? (
+        <section className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <div className="mb-1 flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-blue-500" aria-hidden="true" />
+                <h3 className="text-sm font-semibold text-text-primary">
+                  {localize('com_ui_cowork_planner_preview')}
+                </h3>
+              </div>
+              <p className="text-xs leading-5 text-text-secondary">
+                {localize('com_ui_cowork_planner_current_understanding')}
+              </p>
+              <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-text-primary">
+                {plannerPreview.currentUnderstanding || '-'}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <ActionButton
+                variant="primary"
+                onClick={acceptPlannerPreview}
+                disabled={isPlannerAccepted}
+              >
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                {localize(
+                  isPlannerAccepted
+                    ? 'com_ui_cowork_planner_accepted'
+                    : 'com_ui_cowork_planner_accept',
+                )}
+              </ActionButton>
+              <ActionButton onClick={discardPlannerPreview}>
+                <X className="h-3.5 w-3.5" aria-hidden="true" />
+                {localize(
+                  isPlannerAccepted
+                    ? 'com_ui_cowork_planner_clear_preview'
+                    : 'com_ui_cowork_planner_discard',
+                )}
+              </ActionButton>
+            </div>
+          </div>
+
+          {plannerWarnings.length > 0 ? (
+            <div className="mt-3 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2">
+              <div className="text-xs font-semibold text-text-primary">
+                {localize('com_ui_cowork_planner_warnings')}
+              </div>
+              <ul className="mt-1 list-disc space-y-1 pl-4 text-xs leading-5 text-text-secondary">
+                {plannerWarnings.map((warning, index) => (
+                  <li key={`planner-warning-${index}`}>{warning}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <div className="mt-3 grid gap-2 xl:grid-cols-2">
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_goal')}
+              items={plannerPreview.goal ? [plannerPreview.goal] : []}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_planner_clarifying_questions')}
+              items={plannerPreview.clarifyingQuestions}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_planner_in_scope')}
+              items={plannerPreview.scope}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_planner_out_of_scope')}
+              items={plannerPreview.exclusions}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_planner_likely_files')}
+              items={plannerPreview.inspectFiles}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_planner_suggested_files')}
+              items={plannerPreview.suggestedFiles}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_plan')}
+              items={plannerPreview.steps.map((step) => step.title)}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_risks')}
+              items={plannerPreview.risks}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_verification')}
+              items={plannerPreview.verification}
+            />
+            <PlannerPreviewList
+              title={localize('com_ui_cowork_planner_next_action')}
+              items={plannerPreview.nextAction ? [plannerPreview.nextAction] : []}
+            />
+          </div>
+
+          <details className="mt-3 rounded-md border border-border-light bg-surface-primary p-3">
+            <summary className="cursor-pointer list-none text-xs font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
+              {localize('com_ui_cowork_planner_codex_prompt')}
+            </summary>
+            <textarea
+              ref={plannerCodexPromptRef}
+              readOnly
+              rows={6}
+              value={plannerPreview.codexPrompt}
+              aria-label={localize('com_ui_cowork_planner_codex_prompt')}
+              className="mt-2 w-full resize-none rounded-md border border-border-light bg-surface-secondary px-3 py-2 font-mono text-xs leading-5 text-text-primary outline-none"
+            />
+            <div className="mt-2 flex justify-end">
+              <ActionButton
+                onClick={() => void copyPlannerCodexPrompt()}
+                disabled={!plannerPreview.codexPrompt}
+              >
+                {plannerCopyState === 'copied' ? (
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                {plannerCopyState === 'copied'
+                  ? localize('com_ui_cowork_planner_copied')
+                  : localize('com_ui_cowork_planner_copy_codex_prompt')}
+              </ActionButton>
+            </div>
+          </details>
+        </section>
+      ) : null}
 
       <section className="rounded-lg border border-border-light bg-surface-primary p-3">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
@@ -1035,10 +1416,7 @@ export default function CoworkPanel() {
         <div className="space-y-2">
           {draft.steps.length > 0 ? (
             draft.steps.map((step, index) => (
-              <div
-                key={step.id}
-                className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]"
-              >
+              <div key={step.id} className="grid gap-2 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
                 <select
                   value={step.status}
                   aria-label={`${localize('com_ui_cowork_step_status')} ${index + 1}`}
@@ -1086,98 +1464,98 @@ export default function CoworkPanel() {
         icon={ListChecks}
       >
         <div className="grid gap-3 xl:grid-cols-2">
-        <FieldShell
-          title={localize('com_ui_cowork_scope')}
-          description={localize('com_ui_cowork_scope_help')}
-          icon={ListChecks}
-          variant="plain"
-        >
-          <div className="space-y-2">
-            <TextAreaField
-              value={draft.scope.join('\n')}
-              ariaLabel={localize('com_ui_cowork_scope')}
-              placeholder={localize('com_ui_cowork_scope_placeholder')}
-              onChange={(value) => updateListField('scope', value)}
-            />
-            <TextAreaField
-              value={draft.exclusions.join('\n')}
-              ariaLabel={localize('com_ui_cowork_exclusions')}
-              placeholder={localize('com_ui_cowork_exclusions_placeholder')}
-              onChange={(value) => updateListField('exclusions', value)}
-            />
-            <ActionButton onClick={() => clearListField('exclusions')}>
-              {localize('com_ui_cowork_clear_exclusions')}
-            </ActionButton>
-          </div>
-        </FieldShell>
-
-        <FieldShell
-          title={localize('com_ui_cowork_files')}
-          description={localize('com_ui_cowork_files_help')}
-          icon={FolderOpen}
-          variant="plain"
-        >
-          <div className="space-y-2">
-            <TextAreaField
-              value={draft.inspectFiles.join('\n')}
-              ariaLabel={localize('com_ui_cowork_files_inspect')}
-              placeholder={localize('com_ui_cowork_files_inspect_placeholder')}
-              onChange={(value) => updateListField('inspectFiles', value)}
-            />
-            <TextAreaField
-              value={draft.suggestedFiles.join('\n')}
-              ariaLabel={localize('com_ui_cowork_files_attach')}
-              placeholder={localize('com_ui_cowork_files_placeholder')}
-              onChange={(value) => updateListField('suggestedFiles', value)}
-            />
-            <TextAreaField
-              value={draft.avoidFiles.join('\n')}
-              ariaLabel={localize('com_ui_cowork_files_avoid')}
-              placeholder={localize('com_ui_cowork_files_avoid_placeholder')}
-              onChange={(value) => updateListField('avoidFiles', value)}
-            />
-            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
-              <div className="font-semibold text-text-primary">
-                {localize('com_ui_cowork_files_safety')}
-              </div>
-              <div className="mt-1">
-                {localize('com_ui_cowork_files_safety_help')}{' '}
-                <span className="font-mono">{blockedPathExamples.join(', ')}</span>
-              </div>
+          <FieldShell
+            title={localize('com_ui_cowork_scope')}
+            description={localize('com_ui_cowork_scope_help')}
+            icon={ListChecks}
+            variant="plain"
+          >
+            <div className="space-y-2">
+              <TextAreaField
+                value={draft.scope.join('\n')}
+                ariaLabel={localize('com_ui_cowork_scope')}
+                placeholder={localize('com_ui_cowork_scope_placeholder')}
+                onChange={(value) => updateListField('scope', value)}
+              />
+              <TextAreaField
+                value={draft.exclusions.join('\n')}
+                ariaLabel={localize('com_ui_cowork_exclusions')}
+                placeholder={localize('com_ui_cowork_exclusions_placeholder')}
+                onChange={(value) => updateListField('exclusions', value)}
+              />
+              <ActionButton onClick={() => clearListField('exclusions')}>
+                {localize('com_ui_cowork_clear_exclusions')}
+              </ActionButton>
             </div>
-            <ActionButton onClick={() => clearListField('suggestedFiles')}>
-              {localize('com_ui_cowork_clear_files')}
-            </ActionButton>
-          </div>
-        </FieldShell>
+          </FieldShell>
 
-        <FieldShell
-          title={localize('com_ui_cowork_risks')}
-          description={localize('com_ui_cowork_risks_help')}
-          icon={AlertTriangle}
-          variant="plain"
-        >
-          <TextAreaField
-            value={draft.risks.join('\n')}
-            ariaLabel={localize('com_ui_cowork_risks')}
-            placeholder={localize('com_ui_cowork_risks_placeholder')}
-            onChange={(value) => updateListField('risks', value)}
-          />
-        </FieldShell>
+          <FieldShell
+            title={localize('com_ui_cowork_files')}
+            description={localize('com_ui_cowork_files_help')}
+            icon={FolderOpen}
+            variant="plain"
+          >
+            <div className="space-y-2">
+              <TextAreaField
+                value={draft.inspectFiles.join('\n')}
+                ariaLabel={localize('com_ui_cowork_files_inspect')}
+                placeholder={localize('com_ui_cowork_files_inspect_placeholder')}
+                onChange={(value) => updateListField('inspectFiles', value)}
+              />
+              <TextAreaField
+                value={draft.suggestedFiles.join('\n')}
+                ariaLabel={localize('com_ui_cowork_files_attach')}
+                placeholder={localize('com_ui_cowork_files_placeholder')}
+                onChange={(value) => updateListField('suggestedFiles', value)}
+              />
+              <TextAreaField
+                value={draft.avoidFiles.join('\n')}
+                ariaLabel={localize('com_ui_cowork_files_avoid')}
+                placeholder={localize('com_ui_cowork_files_avoid_placeholder')}
+                onChange={(value) => updateListField('avoidFiles', value)}
+              />
+              <div className="rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
+                <div className="font-semibold text-text-primary">
+                  {localize('com_ui_cowork_files_safety')}
+                </div>
+                <div className="mt-1">
+                  {localize('com_ui_cowork_files_safety_help')}{' '}
+                  <span className="font-mono">{blockedPathExamples.join(', ')}</span>
+                </div>
+              </div>
+              <ActionButton onClick={() => clearListField('suggestedFiles')}>
+                {localize('com_ui_cowork_clear_files')}
+              </ActionButton>
+            </div>
+          </FieldShell>
 
-        <FieldShell
-          title={localize('com_ui_cowork_verification')}
-          description={localize('com_ui_cowork_verification_help')}
-          icon={FileText}
-          variant="plain"
-        >
-          <TextAreaField
-            value={draft.verification.join('\n')}
-            ariaLabel={localize('com_ui_cowork_verification')}
-            placeholder={localize('com_ui_cowork_verification_placeholder')}
-            onChange={(value) => updateListField('verification', value)}
-          />
-        </FieldShell>
+          <FieldShell
+            title={localize('com_ui_cowork_risks')}
+            description={localize('com_ui_cowork_risks_help')}
+            icon={AlertTriangle}
+            variant="plain"
+          >
+            <TextAreaField
+              value={draft.risks.join('\n')}
+              ariaLabel={localize('com_ui_cowork_risks')}
+              placeholder={localize('com_ui_cowork_risks_placeholder')}
+              onChange={(value) => updateListField('risks', value)}
+            />
+          </FieldShell>
+
+          <FieldShell
+            title={localize('com_ui_cowork_verification')}
+            description={localize('com_ui_cowork_verification_help')}
+            icon={FileText}
+            variant="plain"
+          >
+            <TextAreaField
+              value={draft.verification.join('\n')}
+              ariaLabel={localize('com_ui_cowork_verification')}
+              placeholder={localize('com_ui_cowork_verification_placeholder')}
+              onChange={(value) => updateListField('verification', value)}
+            />
+          </FieldShell>
         </div>
       </DisclosureShell>
 

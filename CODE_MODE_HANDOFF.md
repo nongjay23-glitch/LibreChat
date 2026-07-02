@@ -348,7 +348,7 @@ type CoworkDraft = {
   steps: Array<{
     id: string;
     title: string;
-    status: "todo" | "doing" | "done" | "blocked";
+    status: 'todo' | 'doing' | 'done' | 'blocked';
   }>;
   suggestedFiles: string[];
   risks: string[];
@@ -393,6 +393,9 @@ Phase CW-1: Read-only Cowork AI Planner
 - Structured output: Goal, Current understanding, Clarifying questions, In scope, Out of scope, Likely files to inspect, Risks / side effects, Small phased plan, Codex/Code handoff prompt, Manual test checklist.
 - No file writes, patch apply, terminal commands, backend write routes, agents, or autonomous behavior.
 - Phase CW-1A.1 added the dedicated backend endpoint `POST /api/workspace/cowork/planner` for a read-only Cowork planner. The endpoint sanitizes Cowork draft input, creates a strict planner prompt, calls the configured model through a request-only completion path, parses strict JSON, and returns planner output without normal chat history, Notebook/source context, code context, source chunks, or DB message persistence. The Cowork UI button is not implemented yet. Next phase: `Phase CW-1A.2 - Ask Cowork AI Button` with preview / accept / discard.
+- Phase CW-1A.2 added the frontend `Ask Cowork AI` button in Cowork. It calls the dedicated planner endpoint with the current Cowork draft plus only current conversation model-routing metadata, then shows a preview with accept / discard controls and a copyable Codex/Code prompt. Accept fills the existing draft fields; discard leaves the draft unchanged. Cowork still does not edit files, apply patches, run terminal commands, save planner output as chat messages, or send chat history, Notebook/source context, source chunks, code context, or file contents. Next phase: `Phase CW-1A.3 - manual UX test + polish / model routing bugfix if needed`.
+- Phase CW-1A.2.2 keeps the accepted planner preview visible after `Accept Plan` so `Copy Codex Prompt` remains available. Accept is disabled after the current preview is accepted, `Ask Cowork AI` resets acceptance for a new preview, and the user can still clear the preview manually. No chat history, DB persistence, file editing, patch apply, terminal execution, Notebook/source, or normal Chat behavior was added.
+- Phase CW-1A.2.3 tightens Cowork planner unsafe-response detection so it rejects actual secret values only (`key=value`, long bearer/API-key-like strings, private-key headers), not safe metadata such as `.env`, `token`, `password`, `credential`, `secret`, `provider config files containing secrets`, `node_modules`, `.git`, `logs`, `uploads`, database files, or Codex prompt text that names static-check commands. `Reset draft` now clears to the same empty draft shape as `New plan` and both actions clear planner preview, warnings, error, accepted state, and planner copy state.
 - Suggested commit after verification: `Add read-only cowork AI planner`.
 
 Phase 2: Chat handoff polish
@@ -1046,7 +1049,7 @@ type Source = {
   id: string;
   notebookId: string;
   title: string;
-  type: "text" | "markdown" | "pdf" | "url";
+  type: 'text' | 'markdown' | 'pdf' | 'url';
   content: string;
   sizeBytes: number;
   enabled: boolean;
@@ -1138,6 +1141,7 @@ Current implementation:
 - Secret-like, risky, unsupported, too-large, and parse-error sources are surfaced with explicit statuses.
 - Current size limit is 100 KB per source for the frontend-only MVP.
 - Full chunking/source grounding, clickable citations, vector DB/RAG, Studio outputs, persistence, and Attach to Chat are still deferred.
+- Cowork AI Planner stabilized. `New Plan`, `Reset Draft`, and template apply now fully clear all planner state (preview, warnings, error, accepted state, copy states, codex prompt) in addition to the draft. This prevents stale Goal/Plan/Next Action/Prompt Handoff from persisting after starting fresh. False unsafe-context rejection from bare safety labels (`.env`, `token`, `password`, `credential`, `secret`, `node_modules`, `provider config files containing secrets`) is fixed on both frontend and backend; the secret detection pattern now only matches actual secret-like values (`key=value`, `Bearer <long>`, `-----BEGIN`, long random API-key strings), not bare label words that appear in avoidFiles/exclusions. Cowork remains read-only: no file edits, patch apply, terminal commands, chat history usage, Notebook source usage, or code context. Code mode remains the only path for patch/apply/checkpoint/verify.
 
 ### Acceptance Criteria
 
