@@ -767,10 +767,10 @@ export default function SourcesPanel() {
       return;
     }
 
-    const confirmed = window.confirm(
-      localize("com_ui_sources_clear_confirm"),
+    const confirmation = window.prompt(
+      localize("com_ui_sources_clear_confirm_prompt"),
     );
-    if (!confirmed) {
+    if (confirmation !== "CLEAR") {
       return;
     }
 
@@ -806,9 +806,6 @@ export default function SourcesPanel() {
                 aria-hidden="true"
               />
               <div className="min-w-0">
-                <p className="truncate text-xs text-text-secondary">
-                  {localize("com_ui_sources_default_notebook")}
-                </p>
                 <h2 className="truncate text-lg font-semibold">
                   {localize("com_ui_sources")}
                 </h2>
@@ -827,15 +824,6 @@ export default function SourcesPanel() {
             <span className="rounded-md border border-border-light px-2 py-1">
               {notes.length} {localize("com_ui_sources_notes")}
             </span>
-            <button
-              type="button"
-              disabled={!hasNotebookData}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border-light px-3 text-xs font-semibold text-text-primary hover:bg-surface-hover disabled:cursor-not-allowed disabled:text-text-secondary disabled:opacity-60"
-              onClick={clearNotebook}
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-              {localize("com_ui_sources_clear_notebook")}
-            </button>
           </div>
         </div>
       </div>
@@ -1158,6 +1146,23 @@ export default function SourcesPanel() {
                 </p>
               )}
             </section>
+            <details className="border-t border-border-light p-3 text-xs text-text-secondary">
+              <summary className="cursor-pointer select-none font-semibold uppercase hover:text-text-primary">
+                {localize("com_ui_sources_advanced_danger_zone")}
+              </summary>
+              <div className="mt-3 rounded-lg border border-red-500/30 bg-red-500/5 p-3">
+                <p>{localize("com_ui_sources_clear_warning")}</p>
+                <button
+                  type="button"
+                  disabled={!hasNotebookData}
+                  className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md border border-red-500/40 px-3 text-xs font-semibold text-red-600 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:text-text-secondary disabled:opacity-60"
+                  onClick={clearNotebook}
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  {localize("com_ui_sources_clear_notebook")}
+                </button>
+              </div>
+            </details>
           </div>
         </aside>
 
