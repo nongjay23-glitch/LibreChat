@@ -95,6 +95,26 @@ type CoworkPlannerResponse = {
   error?: string;
 };
 
+type CoworkHistoryItem = {
+  id: string;
+  createdAt: string;
+  title: string;
+  draft: CoworkDraft;
+  plannerPreview: CoworkPlannerResult | null;
+  plannerWarnings: string[];
+  isPlannerAccepted: boolean;
+};
+
+type CoworkHistoryCandidate = Partial<{
+  id: string;
+  createdAt: string;
+  title: string;
+  draft: CoworkDraftCandidate;
+  plannerPreview: Partial<CoworkPlannerResult> | null;
+  plannerWarnings: string[];
+  isPlannerAccepted: boolean;
+}>;
+
 type RequestError = Error & {
   response?: {
     data?: {
@@ -119,6 +139,8 @@ type CoworkReadiness = {
 };
 
 const coworkDraftStorageKey = 'librechat.coworkDraft.v2';
+const coworkHistoryStorageKey = 'librechat.coworkPlanHistory.v1';
+const maxCoworkHistoryItems = 20;
 const statusOptions: PlanStatus[] = ['todo', 'doing', 'done', 'blocked'];
 const promptKinds: PromptKind[] = ['plan', 'diff', 'verification', 'handoff'];
 const templateIds: CoworkTemplateId[] = [
@@ -243,6 +265,16 @@ const createStepsFromText = (value: string) =>
 const formatList = (items: string[]) =>
   items.length > 0 ? items.map((item) => `- ${item}`).join('\n') : '- TBD';
 
+const formatHistoryDate = (value: string) => {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toLocaleString();
+};
+
 /**
  * Matches actual secret-like VALUES, not bare label words.
  * Bare labels like "password", "token", ".env" are valid avoidFiles guidance.
@@ -363,6 +395,93 @@ const normalizeStoredDraft = (value: CoworkDraftCandidate, fallback: CoworkDraft
 
 const sanitizeDraftForStorage = (draft: CoworkDraft) => normalizeStoredDraft(draft, draft);
 
+const createDraftSignature = (draft: CoworkDraft) =>
+  JSON.stringify({
+    ...sanitizeDraftForStorage(draft),
+    steps: draft.steps.map((step) => ({
+      title: sanitizeDraftText(step.title),
+      status: step.status,
+    })),
+  });
+
+const createPlannerSignature = (plannerPreview: CoworkPlannerResult | null) =>
+  plannerPreview
+    ? JSON.stringify({
+        goal: plannerPreview.goal,
+        currentUnderstanding: plannerPreview.currentUnderstanding,
+        clarifyingQuestions: plannerPreview.clarifyingQuestions,
+        scope: plannerPreview.scope,
+        exclusions: plannerPreview.exclusions,
+        steps: plannerPreview.steps.map((step) => step.title),
+        inspectFiles: plannerPreview.inspectFiles,
+        suggestedFiles: plannerPreview.suggestedFiles,
+        avoidFiles: plannerPreview.avoidFiles,
+        risks: plannerPreview.risks,
+        verification: plannerPreview.verification,
+        nextAction: plannerPreview.nextAction,
+        codexPrompt: plannerPreview.codexPrompt,
+      })
+    : '';
+
+const createHistorySignature = (draft: CoworkDraft, plannerPreview: CoworkPlannerResult | null) =>
+  `${createDraftSignature(draft)}::${createPlannerSignature(plannerPreview)}`;
+
+const hasHistoryContent = (draft: CoworkDraft, plannerPreview: CoworkPlannerResult | null) =>
+  hasDraftContent(draft) ||
+  Boolean(
+    plannerPreview?.goal ||
+    plannerPreview?.currentUnderstanding ||
+    plannerPreview?.codexPrompt ||
+    plannerPreview?.steps.length,
+  );
+
+const createHistoryTitle = (draft: CoworkDraft, plannerPreview: CoworkPlannerResult | null) =>
+  (draft.goal || plannerPreview?.goal || plannerPreview?.currentUnderstanding || 'Untitled plan')
+    .trim()
+    .slice(0, 120);
+
+const normalizeHistoryItem = (
+  value: CoworkHistoryCandidate,
+  fallbackDraft: CoworkDraft,
+): CoworkHistoryItem | null => {
+  const draft = normalizeStoredDraft(value.draft ?? {}, fallbackDraft);
+  const plannerPreview = value.plannerPreview ? normalizePlannerResult(value.plannerPreview) : null;
+
+  if (!hasHistoryContent(draft, plannerPreview)) {
+    return null;
+  }
+
+  const createdAt =
+    typeof value.createdAt === 'string' && value.createdAt
+      ? value.createdAt
+      : new Date().toISOString();
+  const title =
+    typeof value.title === 'string' && value.title.trim()
+      ? sanitizeDraftText(value.title).slice(0, 120)
+      : createHistoryTitle(draft, plannerPreview);
+
+  return {
+    id: typeof value.id === 'string' && value.id ? value.id : createStepId(),
+    createdAt,
+    title,
+    draft,
+    plannerPreview,
+    plannerWarnings: getPlannerList(value.plannerWarnings),
+    isPlannerAccepted: value.isPlannerAccepted === true,
+  };
+};
+
+const sanitizeHistoryForStorage = (items: CoworkHistoryItem[]) =>
+  items.slice(0, maxCoworkHistoryItems).map((item) => ({
+    id: item.id,
+    createdAt: item.createdAt,
+    title: sanitizeDraftText(item.title).slice(0, 120),
+    draft: sanitizeDraftForStorage(item.draft),
+    plannerPreview: item.plannerPreview ? normalizePlannerResult(item.plannerPreview) : null,
+    plannerWarnings: getPlannerList(item.plannerWarnings),
+    isPlannerAccepted: item.isPlannerAccepted === true,
+  }));
+
 const createStarterDraft = (localize: (key: TranslationKeys) => string): CoworkDraft => ({
   ...createEmptyDraft(),
   goal: localize('com_ui_cowork_starter_goal'),
@@ -423,6 +542,57 @@ const loadStoredDraft = () => {
   } catch {
     return fallback;
   }
+};
+
+const loadStoredHistory = () => {
+  const fallbackDraft = createEmptyDraft();
+
+  if (typeof window === 'undefined') {
+    return [];
+  }
+
+  try {
+    const storedHistory = window.localStorage.getItem(coworkHistoryStorageKey);
+
+    if (!storedHistory) {
+      return [];
+    }
+
+    const parsed = JSON.parse(storedHistory);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .map((item) => normalizeHistoryItem(item as CoworkHistoryCandidate, fallbackDraft))
+      .filter((item): item is CoworkHistoryItem => Boolean(item))
+      .slice(0, maxCoworkHistoryItems);
+  } catch {
+    return [];
+  }
+};
+
+const writeStoredDraft = (draft: CoworkDraft) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(
+    coworkDraftStorageKey,
+    JSON.stringify(sanitizeDraftForStorage(draft)),
+  );
+};
+
+const writeStoredHistory = (items: CoworkHistoryItem[]) => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(
+    coworkHistoryStorageKey,
+    JSON.stringify(sanitizeHistoryForStorage(items)),
+  );
 };
 
 const writeClipboard = (text: string) =>
@@ -797,6 +967,13 @@ export default function CoworkPanel() {
   const [isPlannerLoading, setIsPlannerLoading] = useState(false);
   const [plannerCopyState, setPlannerCopyState] = useState<CopyState>('idle');
   const [isPlannerAccepted, setIsPlannerAccepted] = useState(false);
+  const [coworkHistory, setCoworkHistory] = useState<CoworkHistoryItem[]>(() =>
+    loadStoredHistory(),
+  );
+  const [historyCopyId, setHistoryCopyId] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isMoreOpen, setIsMoreOpen] = useState(false);
+  const [isReadyDetailsOpen, setIsReadyDetailsOpen] = useState(false);
 
   const planPrompt = useMemo(() => createPlanPrompt(draft), [draft]);
   const diffPrompt = useMemo(() => createDiffPrompt(draft), [draft]);
@@ -828,14 +1005,23 @@ export default function CoworkPanel() {
     }
 
     try {
-      window.localStorage.setItem(
-        coworkDraftStorageKey,
-        JSON.stringify(sanitizeDraftForStorage(draft)),
-      );
+      writeStoredDraft(draft);
     } catch {
       return;
     }
   }, [draft]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    try {
+      writeStoredHistory(coworkHistory);
+    } catch {
+      return;
+    }
+  }, [coworkHistory]);
 
   useEffect(() => {
     if (!hasSuggestedFiles && activePromptKind === 'diff') {
@@ -892,8 +1078,7 @@ export default function CoworkPanel() {
     resetCopyStates();
   };
 
-  const startNewPlan = () => {
-    replaceDraft(createEmptyDraft());
+  const clearPlannerState = () => {
     setPlannerPreview(null);
     setPlannerWarnings([]);
     setPlannerError('');
@@ -901,13 +1086,45 @@ export default function CoworkPanel() {
     setPlannerCopyState('idle');
   };
 
+  const archiveCurrentPlan = () => {
+    if (!hasHistoryContent(draft, plannerPreview)) {
+      return;
+    }
+
+    const nextItem: CoworkHistoryItem = {
+      id: createStepId(),
+      createdAt: new Date().toISOString(),
+      title: createHistoryTitle(draft, plannerPreview),
+      draft: sanitizeDraftForStorage(draft),
+      plannerPreview: plannerPreview ? normalizePlannerResult(plannerPreview) : null,
+      plannerWarnings: getPlannerList(plannerWarnings),
+      isPlannerAccepted,
+    };
+    const nextSignature = createHistorySignature(nextItem.draft, nextItem.plannerPreview);
+
+    const first = coworkHistory[0];
+    const firstSignature = first ? createHistorySignature(first.draft, first.plannerPreview) : '';
+
+    if (firstSignature === nextSignature) {
+      return;
+    }
+
+    const nextHistory = [nextItem, ...coworkHistory].slice(0, maxCoworkHistoryItems);
+    setCoworkHistory(nextHistory);
+    writeStoredHistory(nextHistory);
+  };
+
+  const startNewPlan = () => {
+    archiveCurrentPlan();
+    const nextDraft = createEmptyDraft();
+    replaceDraft(nextDraft);
+    clearPlannerState();
+    writeStoredDraft(nextDraft);
+  };
+
   const applyTemplate = (templateId: CoworkTemplateId) => {
     replaceDraft(createTemplateDraft(templateId, localize));
-    setPlannerPreview(null);
-    setPlannerWarnings([]);
-    setPlannerError('');
-    setIsPlannerAccepted(false);
-    setPlannerCopyState('idle');
+    clearPlannerState();
   };
 
   const prepareForCode = () => {
@@ -977,11 +1194,7 @@ export default function CoworkPanel() {
   };
 
   const discardPlannerPreview = () => {
-    setPlannerPreview(null);
-    setPlannerWarnings([]);
-    setIsPlannerAccepted(false);
-    setPlannerError('');
-    setPlannerCopyState('idle');
+    clearPlannerState();
   };
 
   const copyPlannerCodexPrompt = async () => {
@@ -1049,12 +1262,57 @@ export default function CoworkPanel() {
   };
 
   const resetDraft = () => {
-    replaceDraft(createEmptyDraft());
-    setPlannerPreview(null);
-    setPlannerWarnings([]);
+    archiveCurrentPlan();
+    const nextDraft = createStarterDraft(localize);
+    replaceDraft(nextDraft);
+    clearPlannerState();
+    writeStoredDraft(nextDraft);
+  };
+
+  const restoreHistoryItem = (item: CoworkHistoryItem) => {
+    replaceDraft(item.draft);
+    setPlannerPreview(item.plannerPreview);
+    setPlannerWarnings(getPlannerList(item.plannerWarnings));
     setPlannerError('');
-    setIsPlannerAccepted(false);
+    setIsPlannerAccepted(item.isPlannerAccepted);
     setPlannerCopyState('idle');
+    setHistoryCopyId(null);
+    writeStoredDraft(item.draft);
+  };
+
+  const copyHistoryCodexPrompt = async (item: CoworkHistoryItem) => {
+    if (!item.plannerPreview?.codexPrompt) {
+      return;
+    }
+
+    try {
+      await writeClipboard(item.plannerPreview.codexPrompt);
+      setHistoryCopyId(item.id);
+    } catch {
+      setHistoryCopyId(null);
+    }
+  };
+
+  const deleteHistoryItem = (itemId: string) => {
+    if (!window.confirm(localize('com_ui_cowork_history_delete_confirm'))) {
+      return;
+    }
+
+    const nextHistory = coworkHistory.filter((item) => item.id !== itemId);
+    setCoworkHistory(nextHistory);
+    writeStoredHistory(nextHistory);
+  };
+
+  const clearAllHistory = () => {
+    const confirmation = window.prompt(localize('com_ui_cowork_history_clear_confirm'));
+
+    if (confirmation !== 'CLEAR HISTORY') {
+      return;
+    }
+
+    setCoworkHistory([]);
+    setHistoryCopyId(null);
+    writeStoredHistory([]);
   };
 
   const renderCopyLabel = (base: string, state: CopyState) => {
@@ -1094,10 +1352,6 @@ export default function CoworkPanel() {
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />
             {localize('com_ui_cowork_new_plan')}
           </ActionButton>
-          <ActionButton onClick={resetDraft}>
-            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-            {localize('com_ui_cowork_reset')}
-          </ActionButton>
           <ActionButton
             variant="primary"
             onClick={() => void askCoworkAI()}
@@ -1108,14 +1362,6 @@ export default function CoworkPanel() {
               ? localize('com_ui_cowork_planner_loading')
               : localize('com_ui_cowork_ask_ai')}
           </ActionButton>
-          <ActionButton variant="primary" onClick={() => void copyText(planPrompt, 'plan')}>
-            {planCopyState !== 'idle' ? (
-              <Check className="h-3.5 w-3.5" aria-hidden="true" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-            {renderCopyLabel(localize('com_ui_cowork_refine_plan'), planCopyState)}
-          </ActionButton>
           <ActionButton onClick={prepareForCode}>
             {handoffCopyState !== 'idle' ? (
               <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1124,9 +1370,16 @@ export default function CoworkPanel() {
             )}
             {renderCopyLabel(localize('com_ui_cowork_prepare_for_code'), handoffCopyState)}
           </ActionButton>
-          <ActionButton onClick={() => setActive('code-workspace')}>
-            <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
-            {localize('com_ui_cowork_open_code')}
+          <ActionButton onClick={() => setIsHistoryOpen((current) => !current)}>
+            <FileText className="h-3.5 w-3.5" aria-hidden="true" />
+            {localize('com_ui_cowork_history_compact').replace(
+              '{{0}}',
+              String(coworkHistory.length),
+            )}
+          </ActionButton>
+          <ActionButton onClick={() => setIsMoreOpen((current) => !current)}>
+            <ListChecks className="h-3.5 w-3.5" aria-hidden="true" />
+            {localize(isMoreOpen ? 'com_ui_cowork_hide_more' : 'com_ui_cowork_more')}
           </ActionButton>
         </div>
 
@@ -1139,21 +1392,44 @@ export default function CoworkPanel() {
           </div>
         ) : null}
 
-        <div className="space-y-2">
-          <div className="text-xs font-semibold text-text-secondary">
-            {localize('com_ui_cowork_templates')}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {templateIds.map((templateId) => (
-              <ActionButton key={templateId} onClick={() => applyTemplate(templateId)}>
-                {localize(templateLabelKeys[templateId])}
+        {isMoreOpen ? (
+          <div className="rounded-md border border-border-light bg-surface-primary p-3">
+            <div className="flex flex-wrap gap-2">
+              <ActionButton onClick={resetDraft}>
+                <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                {localize('com_ui_cowork_reset')}
               </ActionButton>
-            ))}
+              <ActionButton variant="primary" onClick={() => void copyText(planPrompt, 'plan')}>
+                {planCopyState !== 'idle' ? (
+                  <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                {renderCopyLabel(localize('com_ui_cowork_refine_plan'), planCopyState)}
+              </ActionButton>
+              <ActionButton onClick={() => setActive('code-workspace')}>
+                <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
+                {localize('com_ui_cowork_open_code')}
+              </ActionButton>
+            </div>
+
+            <details className="mt-3">
+              <summary className="cursor-pointer list-none text-xs font-semibold text-text-secondary [&::-webkit-details-marker]:hidden">
+                {localize('com_ui_cowork_templates')}
+              </summary>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {templateIds.map((templateId) => (
+                  <ActionButton key={templateId} onClick={() => applyTemplate(templateId)}>
+                    {localize(templateLabelKeys[templateId])}
+                  </ActionButton>
+                ))}
+              </div>
+              <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                {localize('com_ui_cowork_templates_help')}
+              </p>
+            </details>
           </div>
-          <p className="text-xs leading-5 text-text-tertiary">
-            {localize('com_ui_cowork_templates_help')}
-          </p>
-        </div>
+        ) : null}
 
         {!hasSuggestedFiles ? (
           <div className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs leading-5 text-text-secondary">
@@ -1298,19 +1574,120 @@ export default function CoworkPanel() {
         </section>
       ) : null}
 
+      {isHistoryOpen ? (
+        <section className="rounded-lg border border-border-light bg-surface-primary p-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              <div className="mb-1 flex items-center gap-2">
+                <FileText className="h-4 w-4 text-text-secondary" aria-hidden="true" />
+                <h3 className="text-sm font-semibold text-text-primary">
+                  {localize('com_ui_cowork_history')}
+                </h3>
+              </div>
+              <p className="text-xs leading-5 text-text-secondary">
+                {localize('com_ui_cowork_history_help')}
+              </p>
+            </div>
+            <div className="shrink-0 rounded-md border border-border-light bg-surface-secondary px-3 py-2 text-xs font-semibold text-text-primary">
+              {localize('com_ui_cowork_history_count').replace(
+                '{{0}}',
+                String(coworkHistory.length),
+              )}
+            </div>
+          </div>
+
+          {coworkHistory.length > 0 ? (
+            <div className="mt-3 space-y-2">
+              {coworkHistory.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-md border border-border-light bg-surface-secondary p-2"
+                >
+                  <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-text-primary">
+                        {item.title}
+                      </div>
+                      <div className="mt-1 text-xs text-text-tertiary">
+                        {formatHistoryDate(item.createdAt)}
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      <ActionButton onClick={() => restoreHistoryItem(item)}>
+                        <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                        {localize('com_ui_cowork_history_restore')}
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => void copyHistoryCodexPrompt(item)}
+                        disabled={!item.plannerPreview?.codexPrompt}
+                      >
+                        {historyCopyId === item.id ? (
+                          <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                        {historyCopyId === item.id
+                          ? localize('com_ui_cowork_copied')
+                          : localize('com_ui_cowork_planner_copy_codex_prompt')}
+                      </ActionButton>
+                      <ActionButton onClick={() => deleteHistoryItem(item.id)}>
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        {localize('com_ui_cowork_history_delete')}
+                      </ActionButton>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-3 rounded-md border border-border-light bg-surface-secondary px-3 py-2 text-xs leading-5 text-text-secondary">
+              {localize('com_ui_cowork_history_empty')}
+            </div>
+          )}
+
+          <details className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 p-3">
+            <summary className="cursor-pointer list-none text-xs font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
+              {localize('com_ui_cowork_history_advanced')}
+            </summary>
+            <p className="mt-2 text-xs leading-5 text-text-secondary">
+              {localize('com_ui_cowork_history_clear_help')}
+            </p>
+            <div className="mt-2">
+              <ActionButton onClick={clearAllHistory} disabled={coworkHistory.length === 0}>
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                {localize('com_ui_cowork_history_clear_all')}
+              </ActionButton>
+            </div>
+          </details>
+        </section>
+      ) : null}
+
       <section className="rounded-lg border border-border-light bg-surface-primary p-3">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
-            <div className="mb-1 flex items-center gap-2">
-              <Target className="h-4 w-4 text-green-500" aria-hidden="true" />
-              <h3 className="text-sm font-semibold text-text-primary">
-                {localize('com_ui_cowork_ready_title')}
-              </h3>
-            </div>
-            <div className="text-sm font-semibold text-text-primary">
-              {localize(readiness.statusKey)}
-            </div>
-            <p className="mt-1 text-xs leading-5 text-text-secondary">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+            <Target className="h-4 w-4 shrink-0 text-green-500" aria-hidden="true" />
+            <span className="font-semibold text-text-primary">
+              {localize('com_ui_cowork_ready_title')}
+            </span>
+            <span className="text-text-secondary">
+              {localize('com_ui_cowork_ready_count')
+                .replace('{{0}}', String(readiness.readyCount))
+                .replace('{{1}}', String(readiness.items.length))}
+            </span>
+            <span className="text-text-secondary">- {localize(readiness.statusKey)}</span>
+          </div>
+          <ActionButton onClick={() => setIsReadyDetailsOpen((current) => !current)}>
+            {localize(
+              isReadyDetailsOpen
+                ? 'com_ui_cowork_hide_checklist_details'
+                : 'com_ui_cowork_show_checklist_details',
+            )}
+          </ActionButton>
+        </div>
+
+        {isReadyDetailsOpen ? (
+          <>
+            <p className="mt-2 text-xs leading-5 text-text-secondary">
               {localize(readiness.helpKey)}
             </p>
             <p className="mt-1 text-xs leading-5 text-text-tertiary">
@@ -1321,61 +1698,56 @@ export default function CoworkPanel() {
                   )
                 : localize('com_ui_cowork_ready_all_set')}
             </p>
-          </div>
-          <div className="shrink-0 rounded-md border border-border-light bg-surface-secondary px-3 py-2 text-xs font-semibold text-text-primary">
-            {localize('com_ui_cowork_ready_count')
-              .replace('{{0}}', String(readiness.readyCount))
-              .replace('{{1}}', String(readiness.items.length))}
-          </div>
-        </div>
 
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {readiness.items.map((item) => (
-            <div
-              key={item.labelKey}
-              className={cn(
-                'flex items-center gap-2 rounded-md border px-2.5 py-2 text-xs',
-                item.isReady
-                  ? 'border-green-500/30 bg-green-500/10 text-text-primary'
-                  : 'border-border-light bg-surface-secondary text-text-secondary',
-              )}
-            >
-              {item.isReady ? (
-                <Check className="h-3.5 w-3.5 shrink-0 text-green-500" aria-hidden="true" />
-              ) : (
-                <AlertTriangle
-                  className="h-3.5 w-3.5 shrink-0 text-yellow-500"
-                  aria-hidden="true"
-                />
-              )}
-              <span>{localize(item.labelKey)}</span>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {readiness.items.map((item) => (
+                <div
+                  key={item.labelKey}
+                  className={cn(
+                    'flex items-center gap-2 rounded-md border px-2.5 py-2 text-xs',
+                    item.isReady
+                      ? 'border-green-500/30 bg-green-500/10 text-text-primary'
+                      : 'border-border-light bg-surface-secondary text-text-secondary',
+                  )}
+                >
+                  {item.isReady ? (
+                    <Check className="h-3.5 w-3.5 shrink-0 text-green-500" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle
+                      className="h-3.5 w-3.5 shrink-0 text-yellow-500"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span>{localize(item.labelKey)}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
 
-        <div className="mt-3 grid gap-1 rounded-md bg-surface-secondary p-1 sm:grid-cols-4">
-          {workflowLabelKeys.map((labelKey, index) => {
-            const isActive =
-              (readiness.status === 'planning' && index === 0) ||
-              (readiness.status === 'needsFiles' && index === 1) ||
-              (readiness.status === 'readyForCode' && index === 2) ||
-              (readiness.status === 'needsVerification' && index === 3);
+            <div className="mt-3 grid gap-1 rounded-md bg-surface-secondary p-1 sm:grid-cols-4">
+              {workflowLabelKeys.map((labelKey, index) => {
+                const isActive =
+                  (readiness.status === 'planning' && index === 0) ||
+                  (readiness.status === 'needsFiles' && index === 1) ||
+                  (readiness.status === 'readyForCode' && index === 2) ||
+                  (readiness.status === 'needsVerification' && index === 3);
 
-            return (
-              <div
-                key={labelKey}
-                className={cn(
-                  'rounded px-2 py-1.5 text-center text-xs font-semibold',
-                  isActive
-                    ? 'bg-surface-active-alt text-text-primary shadow-sm'
-                    : 'text-text-secondary',
-                )}
-              >
-                {index + 1}. {localize(labelKey)}
-              </div>
-            );
-          })}
-        </div>
+                return (
+                  <div
+                    key={labelKey}
+                    className={cn(
+                      'rounded px-2 py-1.5 text-center text-xs font-semibold',
+                      isActive
+                        ? 'bg-surface-active-alt text-text-primary shadow-sm'
+                        : 'text-text-secondary',
+                    )}
+                  >
+                    {index + 1}. {localize(labelKey)}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        ) : null}
       </section>
 
       <div className="grid gap-3 xl:grid-cols-2">
