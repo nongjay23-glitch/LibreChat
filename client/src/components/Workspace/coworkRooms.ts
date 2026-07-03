@@ -565,8 +565,12 @@ export function useCoworkRooms() {
     );
   }, [activeRoomId, rooms]);
 
+  const commitCoworkState = (updater: (state: CoworkState) => CoworkState) => {
+    setState(updateCoworkState(updater));
+  };
+
   const createProject = () => {
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const now = new Date().toISOString();
       const nextProject: CoworkProject = {
         id: createCoworkId("cowork-project"),
@@ -586,7 +590,7 @@ export function useCoworkRooms() {
   };
 
   const createRoom = (projectId: string | null = null) => {
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const hasProject =
         projectId != null && currentState.projects.some((project) => project.id === projectId);
       const targetProjectId = hasProject ? projectId : null;
@@ -622,7 +626,7 @@ export function useCoworkRooms() {
   };
 
   const selectRoom = (roomId: string) => {
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const targetRoom = currentState.rooms.find((room) => room.id === roomId && !room.archivedAt);
       return {
         ...currentState,
@@ -634,7 +638,7 @@ export function useCoworkRooms() {
   };
 
   const openProjectsView = (projectId = "") => {
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const targetProjectId = currentState.projects.some((project) => project.id === projectId)
         ? projectId
         : "";
@@ -648,7 +652,7 @@ export function useCoworkRooms() {
   };
 
   const toggleProject = (projectId: string) => {
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const hasProject = currentState.projects.some((project) => project.id === projectId);
       if (!hasProject) {
         return currentState;
@@ -678,7 +682,7 @@ export function useCoworkRooms() {
       createdAt: now,
     };
 
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       let updatedProjectId = "";
       let didUpdate = false;
       const nextRooms = currentState.rooms.map((room) => {
@@ -730,7 +734,7 @@ export function useCoworkRooms() {
       error: error || null,
     };
 
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       let updatedProjectId = "";
       let didUpdate = false;
       const nextRooms = currentState.rooms.map((room) => {
@@ -767,7 +771,7 @@ export function useCoworkRooms() {
       return;
     }
 
-    updateCoworkState((currentState) => ({
+    commitCoworkState((currentState) => ({
       ...currentState,
       rooms: currentState.rooms.map((room) =>
         room.id === roomId ? { ...room, title: trimmedTitle } : room,
@@ -776,7 +780,7 @@ export function useCoworkRooms() {
   };
 
   const deleteRoom = (roomId: string) => {
-    updateCoworkState((currentState) => ({
+    commitCoworkState((currentState) => ({
       ...currentState,
       rooms: currentState.rooms.filter((room) => room.id !== roomId),
       activeRoomId: currentState.activeRoomId === roomId ? "" : currentState.activeRoomId,
@@ -784,7 +788,7 @@ export function useCoworkRooms() {
   };
 
   const duplicateRoom = (roomId: string) => {
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const sourceRoom = currentState.rooms.find((room) => room.id === roomId);
       if (!sourceRoom) {
         return currentState;
@@ -822,7 +826,7 @@ export function useCoworkRooms() {
   };
 
   const togglePinRoom = (roomId: string) => {
-    updateCoworkState((currentState) => ({
+    commitCoworkState((currentState) => ({
       ...currentState,
       rooms: currentState.rooms.map((room) =>
         room.id === roomId ? { ...room, isPinned: !room.isPinned } : room,
@@ -832,7 +836,7 @@ export function useCoworkRooms() {
 
   const archiveRoom = (roomId: string) => {
     const now = new Date().toISOString();
-    updateCoworkState((currentState) => ({
+    commitCoworkState((currentState) => ({
       ...currentState,
       rooms: currentState.rooms.map((room) =>
         room.id === roomId ? { ...room, archivedAt: now, updatedAt: now } : room,
@@ -843,7 +847,7 @@ export function useCoworkRooms() {
 
   const restoreRoom = (roomId: string) => {
     const now = new Date().toISOString();
-    updateCoworkState((currentState) => ({
+    commitCoworkState((currentState) => ({
       ...currentState,
       rooms: currentState.rooms.map((room) =>
         room.id === roomId ? { ...room, archivedAt: null, updatedAt: now } : room,
@@ -853,7 +857,7 @@ export function useCoworkRooms() {
 
   const moveRoomToProject = (roomId: string, projectId: string | null) => {
     const now = new Date().toISOString();
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const targetProjectId =
         projectId && currentState.projects.some((project) => project.id === projectId)
           ? projectId
@@ -889,7 +893,7 @@ export function useCoworkRooms() {
       return;
     }
 
-    updateCoworkState((currentState) => {
+    commitCoworkState((currentState) => {
       const now = new Date().toISOString();
       return {
         ...currentState,
@@ -904,7 +908,7 @@ export function useCoworkRooms() {
 
   const deleteProject = (projectId: string) => {
     const now = new Date().toISOString();
-    updateCoworkState((currentState) => ({
+    commitCoworkState((currentState) => ({
       ...currentState,
       projects: currentState.projects.filter((project) => project.id !== projectId),
       rooms: currentState.rooms.map((room) =>

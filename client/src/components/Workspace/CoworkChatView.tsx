@@ -44,6 +44,25 @@ type CoworkPlannerResponse = {
   error?: string;
 };
 
+type CoworkChatResponse = {
+  ok?: boolean;
+  text?: string;
+  answer?: string;
+  error?: string;
+};
+
+type CoworkChatPayload = {
+  text: string;
+  messages: Array<Pick<CoworkMessage, "role" | "content">>;
+  roomId: string;
+  endpoint: string;
+  endpointType?: string | null;
+  model?: string | null;
+  spec?: string | null;
+  agent_id?: string | null;
+  chatProjectId?: string | null;
+};
+
 type CoworkPlannerPayload = {
   goal: string;
   scope: string[];
@@ -146,6 +165,16 @@ function getRequestErrorMessage(error: unknown, fallback: string) {
   );
 }
 
+function getRecentCoworkChatMessages(messages: CoworkMessage[]) {
+  return messages
+    .filter((message) => !message.error && !message.plannerResult && message.content.trim())
+    .slice(-12)
+    .map((message) => ({
+      role: message.role,
+      content: message.content,
+    }));
+}
+
 function CoworkMessageRow({
   copiedMessageId,
   message,
@@ -223,8 +252,8 @@ function CoworkMessageRow({
               {userLabel}
               <MessageTimestamp value={message.createdAt} />
             </h2>
-            <div className="flex flex-col items-end gap-1">
-              <div className="flex min-h-[20px] w-fit max-w-[85%] flex-col gap-0 rounded-2xl rounded-tr-md border border-orange-500/30 bg-orange-500/10 px-4 py-2 text-left shadow-sm">
+            <div className="flex w-full flex-col items-end gap-1">
+              <div className="flex min-h-[20px] min-w-20 max-w-[75%] flex-col gap-0 rounded-2xl rounded-tr-md border border-orange-500/30 bg-orange-500/10 px-4 py-2 text-left shadow-sm">
                 <div
                   className={cn("whitespace-pre-wrap break-words", fontSize)}
                 >
@@ -278,6 +307,14 @@ function CoworkAssistantCard({
         <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
           {message.error}
         </p>
+      </div>
+    );
+  }
+
+  if (!planner) {
+    return (
+      <div className="mt-2 whitespace-pre-wrap text-sm leading-7 text-text-primary">
+        {message.content}
       </div>
     );
   }
@@ -751,6 +788,7 @@ export default function CoworkChatView() {
   const [draft, setDraft] = useState("");
   const [isTextAreaFocused, setIsTextAreaFocused] = useState(false);
   const [pendingRoomId, setPendingRoomId] = useState("");
+  const [pendingKind, setPendingKind] = useState<"chat" | "plan" | "">("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const localize = useLocalize();
@@ -775,11 +813,10 @@ export default function CoworkChatView() {
   );
 
   const canSend = useMemo(() => {
-    const command = parseCoworkCommand(draft);
     return (
       activeRoom != null &&
       draft.trim().length > 0 &&
-      (!pendingRoomId || !command.isPlanCommand)
+      !pendingRoomId
     );
   }, [activeRoom, draft, pendingRoomId]);
 
@@ -821,6 +858,54 @@ export default function CoworkChatView() {
 
     const command = parseCoworkCommand(prompt);
     if (!command.isPlanCommand) {
+      const model = selectedModel;
+      if (!model.endpoint) {
+        addAssistantMessage(roomId, {
+          content: "",
+          error: localize("com_ui_cowork_chat_missing_endpoint"),
+          model,
+        });
+        return;
+      }
+
+      setPendingRoomId(roomId);
+      setPendingKind("chat");
+      try {
+        const payload: CoworkChatPayload = {
+          text: prompt,
+          messages: getRecentCoworkChatMessages(activeRoom.messages),
+          roomId,
+          endpoint: model.endpoint,
+          endpointType: model.endpointType,
+          model: model.model,
+          spec: model.spec,
+          agent_id: model.agent_id,
+          chatProjectId: model.chatProjectId,
+        };
+        const data = (await request.post(
+          "/api/workspace/cowork/chat",
+          payload,
+        )) as CoworkChatResponse;
+        const content = (data?.text || data?.answer || "").trim();
+
+        if (!data?.ok || !content) {
+          throw new Error(data?.error || localize("com_ui_cowork_chat_error"));
+        }
+
+        addAssistantMessage(roomId, {
+          content,
+          model,
+        });
+      } catch (error) {
+        addAssistantMessage(roomId, {
+          content: "",
+          error: getRequestErrorMessage(error, localize("com_ui_cowork_chat_error")),
+          model,
+        });
+      } finally {
+        setPendingRoomId("");
+        setPendingKind("");
+      }
       return;
     }
 
@@ -851,6 +936,7 @@ export default function CoworkChatView() {
     }
 
     setPendingRoomId(roomId);
+    setPendingKind("plan");
     try {
       const payload: CoworkPlannerPayload = {
         goal: command.task,
@@ -896,6 +982,7 @@ export default function CoworkChatView() {
       });
     } finally {
       setPendingRoomId("");
+      setPendingKind("");
     }
   };
 
@@ -961,7 +1048,11 @@ export default function CoworkChatView() {
             />
             {pendingRoomId && pendingRoomId === activeRoom?.id ? (
               <div className="mx-auto -mt-8 mb-8 max-w-3xl px-4 text-xs text-text-secondary xl:max-w-4xl">
-                {localize("com_ui_cowork_planner_loading")}
+                {localize(
+                  pendingKind === "plan"
+                    ? "com_ui_cowork_planner_loading"
+                    : "com_ui_cowork_chat_loading",
+                )}
               </div>
             ) : null}
             {!isLandingPage && <CoworkFooter />}

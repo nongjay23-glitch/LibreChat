@@ -30,6 +30,8 @@ const MAX_CHECKPOINT_KEEP = 50;
 const CHECKPOINT_DIR = '.workspace-checkpoints';
 const ACTIVITY_FILE = '.workspace-activity.jsonl';
 const MAX_ACTIVITY_ITEMS = 50;
+const MAX_COWORK_CHAT_PROMPT_BYTES = 32 * 1024;
+const MAX_COWORK_CHAT_CONTEXT_MESSAGES = 12;
 const MAX_COWORK_PLANNER_PROMPT_BYTES = 32 * 1024;
 const MAX_COWORK_STRING_LENGTH = 1200;
 const MAX_COWORK_CODEX_PROMPT_LENGTH = 6000;
@@ -190,6 +192,14 @@ function getSafeSourceChatErrorMessage(error) {
 
 function getSafeCoworkPlannerErrorMessage(error) {
   const rawMessage = error?.message || 'Cowork planner request failed.';
+  return String(rawMessage)
+    .replace(/\b(sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
+    .replace(/\b(api[-_ ]?key|token|password|credential|secret)=\S+/gi, '$1=[redacted]')
+    .slice(0, 240);
+}
+
+function getSafeCoworkChatErrorMessage(error) {
+  const rawMessage = error?.message || 'Cowork chat request failed.';
   return String(rawMessage)
     .replace(/\b(sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_-]{12,}\b/g, '[redacted]')
     .replace(/\b(api[-_ ]?key|token|password|credential|secret)=\S+/gi, '$1=[redacted]')
@@ -431,12 +441,79 @@ function prepareCoworkPlannerRequest(req, _res, next) {
   next();
 }
 
+function sanitizeCoworkChatMessages(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((message) => {
+      const role = message?.role === 'assistant' ? 'assistant' : 'user';
+      const content = sanitizeCoworkText(message?.content, MAX_COWORK_STRING_LENGTH);
+      return content ? { role, content } : null;
+    })
+    .filter(Boolean)
+    .slice(-MAX_COWORK_CHAT_CONTEXT_MESSAGES);
+}
+
+function createCoworkChatPrompt({ text, messages = [] }) {
+  const context = messages
+    .map((message) => `${message.role === 'assistant' ? 'Cowork' : 'User'}: ${message.content}`)
+    .join('\n\n');
+
+  return [
+    'You are Cowork AI inside a chat-first work workspace.',
+    'Reply naturally like a helpful collaborator. Keep the answer practical, direct, and in the user language.',
+    'Do not claim you edited files, ran tools, used a terminal, changed Chat history, or accessed project files.',
+    'If the user wants a structured implementation plan, mention that they can use /plan, but do not force every reply into a plan.',
+    context ? `Recent Cowork room context:\n${context}` : '',
+    `User message:\n${text}`,
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function prepareCoworkChatRequest(req, _res, next) {
+  const originalBody = req.body || {};
+  const text = sanitizeCoworkText(originalBody.text, MAX_COWORK_STRING_LENGTH);
+  const messages = sanitizeCoworkChatMessages(originalBody.messages);
+  const prompt = text ? createCoworkChatPrompt({ text, messages }) : '';
+
+  req.body = {
+    endpoint: originalBody.endpoint,
+    endpointType: originalBody.endpointType,
+    model: originalBody.model,
+    spec: originalBody.spec,
+    agent_id: originalBody.agent_id,
+    chatProjectId: originalBody.chatProjectId,
+    text: prompt,
+    tools: [],
+    files: [],
+    manualSkills: [],
+    ephemeralAgent: {
+      ...(originalBody.ephemeralAgent ?? {}),
+      skills: false,
+    },
+  };
+  next();
+}
+
 function requireCoworkPlannerModelRouting(req, res, next) {
   if (typeof req.body?.endpoint !== 'string' || !req.body.endpoint.trim()) {
     return res.status(400).json({
       ok: false,
       error: 'Cowork planner model routing is required.',
       warnings: [],
+    });
+  }
+  next();
+}
+
+function requireCoworkChatModelRouting(req, res, next) {
+  if (typeof req.body?.endpoint !== 'string' || !req.body.endpoint.trim()) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Cowork chat model routing is required.',
     });
   }
   next();
@@ -1362,6 +1439,96 @@ async function readActivities(limit = MAX_ACTIVITY_ITEMS) {
     })
     .filter(Boolean);
 }
+
+router.post(
+  '/cowork/chat',
+  configMiddleware,
+  prepareCoworkChatRequest,
+  requireCoworkChatModelRouting,
+  moderateText,
+  useAgentEndpointOptionBuilder,
+  buildEndpointOption,
+  async (req, res) => {
+    try {
+      const prompt = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+      if (!prompt) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Cowork chat message is required.',
+        });
+      }
+
+      if (Buffer.byteLength(prompt, 'utf8') > MAX_COWORK_CHAT_PROMPT_BYTES) {
+        return res.status(400).json({
+          ok: false,
+          error: 'Cowork chat request is too large.',
+        });
+      }
+
+      const conversationId = `cowork-chat-${randomUUID()}`;
+      const userMessageId = randomUUID();
+      const responseMessageId = randomUUID();
+      const now = new Date().toISOString();
+      const endpointOption = req.body?.endpointOption;
+      const abortController = new AbortController();
+
+      const { client, userMCPAuthMap } = await initializeClient({
+        req,
+        res: silentModelResponse,
+        signal: abortController.signal,
+        endpointOption,
+      });
+
+      client.conversationId = conversationId;
+      client.parentMessageId = userMessageId;
+      client.responseMessageId = responseMessageId;
+      client.user = req.user.id;
+
+      const payload = [
+        {
+          messageId: userMessageId,
+          parentMessageId: Constants.NO_PARENT,
+          conversationId,
+          text: prompt,
+          sender: 'User',
+          isCreatedByUser: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+
+      const { completion } = await client.sendCompletion(payload, {
+        abortController,
+        userMCPAuthMap,
+      });
+      const text = extractCompletionText(completion);
+
+      if (!text) {
+        return res.status(502).json({
+          ok: false,
+          error: 'Cowork chat returned an empty response.',
+        });
+      }
+
+      return res.json({
+        ok: true,
+        text,
+        answer: text,
+      });
+    } catch (error) {
+      const status = error?.status || error?.response?.status || 500;
+      const message = getSafeCoworkChatErrorMessage(error);
+      logger.error('[cowork-chat] request failed', {
+        status,
+        message,
+      });
+      return res.status(status >= 400 && status < 600 ? status : 500).json({
+        ok: false,
+        error: message,
+      });
+    }
+  },
+);
 
 router.post(
   '/cowork/planner',
