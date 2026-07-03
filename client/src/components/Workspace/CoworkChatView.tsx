@@ -2,8 +2,11 @@ import { useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { SendIcon, TextareaAutosize } from "@librechat/client";
 import {
+  AlertTriangle,
   ArrowUpDown,
   Bookmark,
+  Check,
+  Copy,
   Folder,
   MessageSquareText,
   Mic,
@@ -18,17 +21,165 @@ import type {
   MutableRefObject,
   SetStateAction,
 } from "react";
-import type { CoworkMessage, CoworkProject, CoworkRoom } from "./coworkRooms";
+import { request } from "librechat-data-provider";
+import { useRecoilValue } from "recoil";
+import type {
+  CoworkMessage,
+  CoworkMessageModel,
+  CoworkPlannerResult,
+  CoworkProject,
+  CoworkRoom,
+} from "./coworkRooms";
 import MessageTimestamp from "~/components/Chat/Messages/ui/MessageTimestamp";
 import { useLocalize } from "~/hooks";
 import { fontSizeAtom } from "~/store/fontSize";
 import { cn, removeFocusRings } from "~/utils";
+import store from "~/store";
 import { useCoworkRooms } from "./coworkRooms";
 
-function CoworkMessageRow({ message }: { message: CoworkMessage }) {
+type CoworkPlannerResponse = {
+  ok?: boolean;
+  planner?: Partial<CoworkPlannerResult>;
+  warnings?: string[];
+  error?: string;
+};
+
+type CoworkPlannerPayload = {
+  goal: string;
+  scope: string[];
+  exclusions: string[];
+  steps: never[];
+  inspectFiles: string[];
+  suggestedFiles: string[];
+  avoidFiles: string[];
+  risks: string[];
+  verification: string[];
+  nextAction: string;
+  endpoint: string;
+  endpointType?: string | null;
+  model?: string | null;
+  spec?: string | null;
+  agent_id?: string | null;
+  chatProjectId?: string | null;
+};
+
+function getPlannerText(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getPlannerList(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => getPlannerText(item))
+        .filter((item) => item.length > 0)
+    : [];
+}
+
+function getPlannerSteps(value: unknown): CoworkPlannerResult["steps"] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((step) => {
+      const candidate =
+        step != null && typeof step === "object"
+          ? (step as { title?: unknown })
+          : null;
+      return {
+        title: getPlannerText(candidate?.title),
+        status: "todo" as const,
+      };
+    })
+    .filter((step) => step.title.length > 0);
+}
+
+function normalizePlannerResult(
+  planner: Partial<CoworkPlannerResult> | undefined,
+  warnings: string[] | undefined,
+): CoworkPlannerResult {
+  return {
+    goal: getPlannerText(planner?.goal),
+    currentUnderstanding: getPlannerText(planner?.currentUnderstanding),
+    clarifyingQuestions: getPlannerList(planner?.clarifyingQuestions),
+    scope: getPlannerList(planner?.scope),
+    exclusions: getPlannerList(planner?.exclusions),
+    steps: getPlannerSteps(planner?.steps),
+    inspectFiles: getPlannerList(planner?.inspectFiles),
+    suggestedFiles: getPlannerList(planner?.suggestedFiles),
+    avoidFiles: getPlannerList(planner?.avoidFiles),
+    risks: getPlannerList(planner?.risks),
+    verification: getPlannerList(planner?.verification),
+    nextAction: getPlannerText(planner?.nextAction),
+    codexPrompt: getPlannerText(planner?.codexPrompt),
+    warnings: getPlannerList(warnings),
+  };
+}
+
+function getRequestErrorMessage(error: unknown, fallback: string) {
+  const requestError = error as {
+    response?: { data?: { error?: string; message?: string } };
+    message?: string;
+  };
+  return (
+    requestError.response?.data?.error ||
+    requestError.response?.data?.message ||
+    requestError.message ||
+    fallback
+  );
+}
+
+function CoworkMessageRow({
+  copiedMessageId,
+  message,
+  onCopyCodexPrompt,
+}: {
+  copiedMessageId: string;
+  message: CoworkMessage;
+  onCopyCodexPrompt: (message: CoworkMessage) => void;
+}) {
   const fontSize = useAtomValue(fontSizeAtom);
   const localize = useLocalize();
   const userLabel = localize("com_ui_you");
+  const assistantLabel = localize("com_ui_cowork");
+
+  if (message.role === "assistant") {
+    return (
+      <div className="text-token-text-primary w-full border-0 bg-transparent dark:border-0 dark:bg-transparent">
+        <div className="m-auto justify-center p-4 py-2 md:gap-6">
+          <div
+            id={message.id}
+            aria-label={`${localize("com_ui_cowork")} ${localize("com_ui_assistant")}`}
+            className="message-render group mx-auto flex flex-1 gap-3 transition-all duration-300 transform-gpu focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border-xheavy md:max-w-[47rem] xl:max-w-[55rem]"
+          >
+            <div className="relative flex flex-shrink-0 flex-col items-center">
+              <div className="flex h-6 w-6 items-center justify-center overflow-hidden rounded-full pt-0.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-surface-active-alt text-text-primary">
+                  <MessageSquareText className="h-4 w-4" aria-hidden="true" />
+                </div>
+              </div>
+            </div>
+            <div className="relative flex min-w-0 flex-1 flex-col">
+              <h2
+                className={cn(
+                  "select-none font-semibold text-text-primary",
+                  fontSize,
+                )}
+              >
+                {assistantLabel}
+                <MessageTimestamp value={message.createdAt} />
+              </h2>
+              <CoworkAssistantCard
+                copied={copiedMessageId === message.id}
+                message={message}
+                onCopyCodexPrompt={onCopyCodexPrompt}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="text-token-text-primary w-full border-0 bg-transparent dark:border-0 dark:bg-transparent">
@@ -66,6 +217,147 @@ function CoworkMessageRow({ message }: { message: CoworkMessage }) {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function PlannerList({ items, title }: { items: string[]; title: string }) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+      <div className="text-xs font-semibold text-text-primary">{title}</div>
+      <ul className="mt-1 list-disc space-y-1 pl-4 text-xs leading-5 text-text-secondary">
+        {items.map((item, index) => (
+          <li key={`${title}-${index}`}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function CoworkAssistantCard({
+  copied,
+  message,
+  onCopyCodexPrompt,
+}: {
+  copied: boolean;
+  message: CoworkMessage;
+  onCopyCodexPrompt: (message: CoworkMessage) => void;
+}) {
+  const localize = useLocalize();
+  const planner = message.plannerResult;
+
+  if (message.error) {
+    return (
+      <div className="mt-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-text-primary">
+        <div className="flex items-center gap-2 font-semibold">
+          <AlertTriangle className="h-4 w-4 text-red-400" aria-hidden="true" />
+          {localize("com_ui_cowork_planner_error")}
+        </div>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
+          {message.error}
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 rounded-lg border border-border-light bg-surface-primary p-3 text-sm text-text-primary shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="font-semibold">
+          {localize("com_ui_cowork_planner_preview")}
+        </div>
+        {message.model?.endpoint ? (
+          <div className="rounded-full bg-surface-secondary px-2 py-1 text-xs text-text-secondary">
+            {message.model.model || message.model.spec || message.model.endpoint}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-3 space-y-3">
+        <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+          <div className="text-xs font-semibold text-text-primary">
+            {localize("com_ui_cowork_planner_current_understanding")}
+          </div>
+          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
+            {planner?.currentUnderstanding || message.content || planner?.goal || "-"}
+          </p>
+        </div>
+
+        {planner?.nextAction ? (
+          <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+            <div className="text-xs font-semibold text-text-primary">
+              {localize("com_ui_cowork_planner_next_action")}
+            </div>
+            <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
+              {planner.nextAction}
+            </p>
+          </div>
+        ) : null}
+
+        <PlannerList
+          title={localize("com_ui_cowork_planner_clarifying_questions")}
+          items={planner?.clarifyingQuestions ?? []}
+        />
+
+        {planner?.steps.length ? (
+          <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+            <div className="text-xs font-semibold text-text-primary">
+              {localize("com_ui_cowork_plan")}
+            </div>
+            <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs leading-5 text-text-secondary">
+              {planner.steps.map((step, index) => (
+                <li key={`${message.id}-step-${index}`}>{step.title}</li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
+
+        <PlannerList
+          title={localize("com_ui_cowork_risks")}
+          items={planner?.risks ?? []}
+        />
+        <PlannerList
+          title={localize("com_ui_cowork_verification")}
+          items={planner?.verification ?? []}
+        />
+        <PlannerList
+          title={localize("com_ui_cowork_planner_warnings")}
+          items={planner?.warnings ?? []}
+        />
+
+        {planner?.codexPrompt ? (
+          <details className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+            <summary className="cursor-pointer list-none text-xs font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
+              {localize("com_ui_cowork_planner_codex_prompt")}
+            </summary>
+            <textarea
+              readOnly
+              rows={6}
+              value={planner.codexPrompt}
+              aria-label={localize("com_ui_cowork_planner_codex_prompt")}
+              className="mt-2 w-full resize-none rounded-md border border-border-light bg-surface-primary px-3 py-2 font-mono text-xs leading-5 text-text-primary outline-none"
+            />
+            <button
+              type="button"
+              onClick={() => onCopyCodexPrompt(message)}
+              className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-border-light bg-surface-primary px-3 text-xs font-semibold text-text-primary hover:bg-surface-hover"
+            >
+              {copied ? (
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+              {copied
+                ? localize("com_ui_cowork_copied")
+                : localize("com_ui_cowork_planner_copy_codex_prompt")}
+            </button>
+          </details>
+        ) : null}
       </div>
     </div>
   );
@@ -167,7 +459,15 @@ function CoworkHeader({
   );
 }
 
-function CoworkMessagesView({ messages }: { messages: CoworkMessage[] }) {
+function CoworkMessagesView({
+  copiedMessageId,
+  messages,
+  onCopyCodexPrompt,
+}: {
+  copiedMessageId: string;
+  messages: CoworkMessage[];
+  onCopyCodexPrompt: (message: CoworkMessage) => void;
+}) {
   return (
     <div className="relative flex-1 overflow-hidden overflow-y-auto">
       <div className="relative h-full">
@@ -181,7 +481,12 @@ function CoworkMessagesView({ messages }: { messages: CoworkMessage[] }) {
         >
           <div className="flex flex-col pb-9 pt-14 dark:bg-transparent">
             {messages.map((message) => (
-              <CoworkMessageRow key={message.id} message={message} />
+              <CoworkMessageRow
+                key={message.id}
+                copiedMessageId={copiedMessageId}
+                message={message}
+                onCopyCodexPrompt={onCopyCodexPrompt}
+              />
             ))}
             <div
               id="cowork-messages-end"
@@ -416,6 +721,7 @@ function CoworkProjectsOverview({
 export default function CoworkChatView() {
   const {
     activeRoom,
+    addAssistantMessage,
     addMessage,
     createProject,
     createRoom,
@@ -424,13 +730,36 @@ export default function CoworkChatView() {
     projects,
     rooms,
   } = useCoworkRooms();
+  const conversation = useRecoilValue(store.conversationByIndex(0));
   const [draft, setDraft] = useState("");
   const [isTextAreaFocused, setIsTextAreaFocused] = useState(false);
+  const [pendingRoomId, setPendingRoomId] = useState("");
+  const [copiedMessageId, setCopiedMessageId] = useState("");
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
+  const localize = useLocalize();
+
+  const selectedModel = useMemo<CoworkMessageModel>(
+    () => ({
+      endpoint: conversation?.endpoint ?? null,
+      endpointType: conversation?.endpointType ?? null,
+      model: conversation?.model ?? null,
+      spec: conversation?.spec ?? null,
+      agent_id: conversation?.agent_id ?? null,
+      chatProjectId: conversation?.chatProjectId ?? null,
+    }),
+    [
+      conversation?.agent_id,
+      conversation?.chatProjectId,
+      conversation?.endpoint,
+      conversation?.endpointType,
+      conversation?.model,
+      conversation?.spec,
+    ],
+  );
 
   const canSend = useMemo(() => {
-    return activeRoom != null && draft.trim().length > 0;
-  }, [activeRoom, draft]);
+    return activeRoom != null && draft.trim().length > 0 && !pendingRoomId;
+  }, [activeRoom, draft, pendingRoomId]);
 
   const isLandingPage = !activeRoom || activeRoom.messages.length === 0;
 
@@ -441,19 +770,90 @@ export default function CoworkChatView() {
     textAreaRef.current?.focus();
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!activeRoom || !draft.trim()) {
+  const handleCopyCodexPrompt = async (message: CoworkMessage) => {
+    const codexPrompt = message.plannerResult?.codexPrompt;
+    if (!codexPrompt) {
       return;
     }
 
-    addMessage(activeRoom.id, draft);
+    await navigator.clipboard.writeText(codexPrompt);
+    setCopiedMessageId(message.id);
+    window.setTimeout(() => setCopiedMessageId(""), 1600);
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const prompt = draft.trim();
+    if (!activeRoom || !prompt || pendingRoomId) {
+      return;
+    }
+
+    const roomId = activeRoom.id;
+    const model = selectedModel;
+    addMessage(roomId, prompt);
     setDraft("");
     requestAnimationFrame(() => {
       if (textAreaRef.current) {
         textAreaRef.current.style.height = "44px";
       }
     });
+
+    if (!model.endpoint) {
+      addAssistantMessage(roomId, {
+        content: "",
+        error: localize("com_ui_cowork_planner_missing_endpoint"),
+        model,
+      });
+      return;
+    }
+
+    setPendingRoomId(roomId);
+    try {
+      const payload: CoworkPlannerPayload = {
+        goal: prompt,
+        scope: [],
+        exclusions: [],
+        steps: [],
+        inspectFiles: [],
+        suggestedFiles: [],
+        avoidFiles: [],
+        risks: [],
+        verification: [],
+        nextAction: "",
+        endpoint: model.endpoint,
+        endpointType: model.endpointType,
+        model: model.model,
+        spec: model.spec,
+        agent_id: model.agent_id,
+        chatProjectId: model.chatProjectId,
+      };
+      const data = (await request.post(
+        "/api/workspace/cowork/planner",
+        payload,
+      )) as CoworkPlannerResponse;
+
+      if (!data?.ok || !data.planner) {
+        throw new Error(data?.error || localize("com_ui_cowork_planner_error"));
+      }
+
+      const plannerResult = normalizePlannerResult(data.planner, data.warnings);
+      addAssistantMessage(roomId, {
+        content:
+          plannerResult.currentUnderstanding ||
+          plannerResult.goal ||
+          localize("com_ui_cowork_planner_preview"),
+        plannerResult,
+        model,
+      });
+    } catch (error) {
+      addAssistantMessage(roomId, {
+        content: "",
+        error: getRequestErrorMessage(error, localize("com_ui_cowork_planner_error")),
+        model,
+      });
+    } finally {
+      setPendingRoomId("");
+    }
   };
 
   if (isProjectsViewOpen) {
@@ -491,7 +891,11 @@ export default function CoworkChatView() {
               roomTitle={activeRoom?.title}
             />
           ) : (
-            <CoworkMessagesView messages={activeRoom.messages} />
+            <CoworkMessagesView
+              copiedMessageId={copiedMessageId}
+              messages={activeRoom.messages}
+              onCopyCodexPrompt={handleCopyCodexPrompt}
+            />
           )}
 
           <div
@@ -504,7 +908,7 @@ export default function CoworkChatView() {
             <CoworkComposer
               canSend={canSend}
               draft={draft}
-              disabled={!activeRoom}
+              disabled={!activeRoom || !!pendingRoomId}
               isTextAreaFocused={isTextAreaFocused}
               setDraft={setDraft}
               setIsTextAreaFocused={setIsTextAreaFocused}
@@ -512,6 +916,11 @@ export default function CoworkChatView() {
               onContainerClick={handleContainerClick}
               onSubmit={handleSubmit}
             />
+            {pendingRoomId && pendingRoomId === activeRoom?.id ? (
+              <div className="mx-auto -mt-8 mb-8 max-w-3xl px-4 text-xs text-text-secondary xl:max-w-4xl">
+                {localize("com_ui_cowork_planner_loading")}
+              </div>
+            ) : null}
             {!isLandingPage && <CoworkFooter />}
           </div>
         </div>

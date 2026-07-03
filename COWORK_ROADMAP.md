@@ -170,6 +170,7 @@ CW-1B.5 - Local Cowork rooms:
 - CW-1B.5.10 makes Cowork row actions more Chat-like without touching normal Chat. Cowork chat/project three-dot menus now use inline rename and in-app dialogs for delete and change-project flows instead of browser `prompt` / `confirm`; all actions still write only Cowork localStorage.
 - CW-1B.5.11 localizes the Cowork rooms sidebar, Cowork chat shell, and Cowork projects overview labels so the new Cowork surfaces follow the frontend localization rule without editing normal Chat.
 - CW-1B.5.12 adds a one-time legacy planner current-draft migration. A meaningful old `librechat.coworkDraft.v2` draft is archived into `librechat.coworkPlanHistory.v1` before the stale current draft is cleared; existing Cowork History is preserved and Cowork Chat continues to use only its local room/project storage.
+- CW-1B.7 Step 2 connects the chat-first `CoworkChatView` composer to the existing read-only Cowork planner endpoint. Cowork uses selected normal Chat model routing metadata as read-only request metadata, appends planner results as Cowork-only assistant messages in `localStorage`, and still avoids normal Chat submit, normal Chat conversations/messages, backend Cowork persistence, file actions, tools, terminal actions, and Send to Code.
 - Cowork projects, rooms, active room, and messages remain separate from normal Chat projects, conversations, history, and APIs.
 - No AI calls, planner endpoint calls, backend persistence, file actions, tool actions, or normal Chat conversation writes yet.
 

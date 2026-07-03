@@ -2,9 +2,50 @@ import { useEffect, useMemo, useState } from "react";
 
 export type CoworkMessage = {
   id: string;
-  role: "user";
+  role: "user" | "assistant";
   content: string;
   createdAt: string;
+  plannerResult?: CoworkPlannerResult | null;
+  model?: CoworkMessageModel | null;
+  error?: string | null;
+};
+
+export type CoworkPlannerStep = {
+  title: string;
+  status: "todo";
+};
+
+export type CoworkPlannerResult = {
+  goal: string;
+  currentUnderstanding: string;
+  clarifyingQuestions: string[];
+  scope: string[];
+  exclusions: string[];
+  steps: CoworkPlannerStep[];
+  inspectFiles: string[];
+  suggestedFiles: string[];
+  avoidFiles: string[];
+  risks: string[];
+  verification: string[];
+  nextAction: string;
+  codexPrompt: string;
+  warnings: string[];
+};
+
+export type CoworkMessageModel = {
+  endpoint?: string | null;
+  endpointType?: string | null;
+  model?: string | null;
+  spec?: string | null;
+  agent_id?: string | null;
+  chatProjectId?: string | null;
+};
+
+export type CoworkAssistantMessageInput = {
+  content: string;
+  plannerResult?: CoworkPlannerResult | null;
+  model?: CoworkMessageModel | null;
+  error?: string | null;
 };
 
 export type CoworkProject = {
@@ -96,6 +137,18 @@ function getLegacyStringArray(value: unknown) {
     : [];
 }
 
+function getString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value
+        .map((item) => getString(item))
+        .filter((item) => item.length > 0)
+    : [];
+}
+
 function normalizeLegacyDraft(value: unknown): LegacyCoworkDraft | null {
   if (!isObjectRecord(value)) {
     return null;
@@ -154,6 +207,58 @@ function createLegacyHistoryItem(draft: LegacyCoworkDraft): LegacyCoworkHistoryI
   };
 }
 
+function normalizePlannerSteps(value: unknown): CoworkPlannerStep[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .filter(isObjectRecord)
+    .map((step) => ({
+      title: getString(step.title),
+      status: "todo" as const,
+    }))
+    .filter((step) => step.title.length > 0);
+}
+
+function normalizePlannerResult(value: unknown): CoworkPlannerResult | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+
+  return {
+    goal: getString(value.goal),
+    currentUnderstanding: getString(value.currentUnderstanding),
+    clarifyingQuestions: getStringArray(value.clarifyingQuestions),
+    scope: getStringArray(value.scope),
+    exclusions: getStringArray(value.exclusions),
+    steps: normalizePlannerSteps(value.steps),
+    inspectFiles: getStringArray(value.inspectFiles),
+    suggestedFiles: getStringArray(value.suggestedFiles),
+    avoidFiles: getStringArray(value.avoidFiles),
+    risks: getStringArray(value.risks),
+    verification: getStringArray(value.verification),
+    nextAction: getString(value.nextAction),
+    codexPrompt: getString(value.codexPrompt),
+    warnings: getStringArray(value.warnings),
+  };
+}
+
+function normalizeMessageModel(value: unknown): CoworkMessageModel | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+
+  return {
+    endpoint: getString(value.endpoint) || null,
+    endpointType: getString(value.endpointType) || null,
+    model: getString(value.model) || null,
+    spec: getString(value.spec) || null,
+    agent_id: getString(value.agent_id) || null,
+    chatProjectId: getString(value.chatProjectId) || null,
+  };
+}
+
 function normalizeMessage(message: unknown): CoworkMessage | null {
   if (message == null || typeof message !== "object") {
     return null;
@@ -162,19 +267,27 @@ function normalizeMessage(message: unknown): CoworkMessage | null {
   const candidate = message as Partial<CoworkMessage>;
   if (
     typeof candidate.id !== "string" ||
-    candidate.role !== "user" ||
+    (candidate.role !== "user" && candidate.role !== "assistant") ||
     typeof candidate.content !== "string" ||
     typeof candidate.createdAt !== "string"
   ) {
     return null;
   }
 
-  return {
+  const normalizedMessage: CoworkMessage = {
     id: candidate.id,
-    role: "user",
+    role: candidate.role,
     content: candidate.content,
     createdAt: candidate.createdAt,
   };
+
+  if (candidate.role === "assistant") {
+    normalizedMessage.plannerResult = normalizePlannerResult(candidate.plannerResult);
+    normalizedMessage.model = normalizeMessageModel(candidate.model);
+    normalizedMessage.error = getString(candidate.error) || null;
+  }
+
+  return normalizedMessage;
 }
 
 function normalizeProject(project: unknown): CoworkProject | null {
@@ -599,6 +712,55 @@ export function useCoworkRooms() {
     });
   };
 
+  const addAssistantMessage = (roomId: string, message: CoworkAssistantMessageInput) => {
+    const trimmedContent = message.content.trim();
+    const error = message.error?.trim() ?? "";
+    if (!trimmedContent && !message.plannerResult && !error) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const nextMessage: CoworkMessage = {
+      id: createCoworkId("cowork-message"),
+      role: "assistant",
+      content: trimmedContent,
+      createdAt: now,
+      plannerResult: message.plannerResult ?? null,
+      model: message.model ?? null,
+      error: error || null,
+    };
+
+    updateCoworkState((currentState) => {
+      let updatedProjectId = "";
+      let didUpdate = false;
+      const nextRooms = currentState.rooms.map((room) => {
+        if (room.id !== roomId || room.archivedAt) {
+          return room;
+        }
+
+        didUpdate = true;
+        updatedProjectId = room.projectId ?? "";
+        return {
+          ...room,
+          updatedAt: now,
+          messages: [...room.messages, nextMessage],
+        };
+      });
+
+      if (!didUpdate) {
+        return currentState;
+      }
+
+      return {
+        ...currentState,
+        rooms: nextRooms,
+        projects: updatedProjectId
+          ? updateProjectTimestamp(currentState.projects, updatedProjectId)
+          : currentState.projects,
+      };
+    });
+  };
+
   const renameRoom = (roomId: string, title: string) => {
     const trimmedTitle = title.trim();
     if (!trimmedTitle) {
@@ -764,6 +926,7 @@ export function useCoworkRooms() {
     projects,
     activeRoom,
     activeRoomId,
+    addAssistantMessage,
     expandedProjectIds,
     isProjectsViewOpen,
     openProjectId,
