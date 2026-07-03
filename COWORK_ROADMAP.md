@@ -162,6 +162,16 @@ CW-1B.5 - Local Cowork rooms:
 - Add frontend-only Cowork rooms/messages in `localStorage`.
 - Keep Cowork rooms separate from normal Chat history.
 - Left side becomes Cowork rooms/projects/task history.
+- Started: Cowork rooms and user messages persist only in browser `localStorage` with keys `librechat.cowork.rooms.v1` and `librechat.cowork.activeRoomId.v1`.
+- `CoworkChatView` now follows the normal Chat visual layout: header, scrollable local message area, bottom composer, and local user message bubbles.
+- CW-1B.5.7 adds local-only Cowork projects and Chat-like sidebar organization. Cowork projects persist under `librechat.cowork.projects.v1`, expanded project state persists under `librechat.cowork.expandedProjectIds.v1`, existing standalone rooms continue with `projectId: null`, project rooms stay under their project, and standalone Cowork chats are grouped by Today / Yesterday / Previous 7 days / Older.
+- CW-1B.5.8 adds local-only Cowork row menus and a Cowork projects overview. Cowork chat rows support local share-copy, pin/unpin, rename, duplicate, change project, archive, and delete actions. Cowork project rows support Open project, rename, and delete. Open project switches the dedicated `CoworkChatView` surface into a local Cowork projects overview stored under `librechat.cowork.projectsView.v1` / `librechat.cowork.openProjectId.v1`; it does not navigate to normal Chat projects.
+- CW-1B.5.9 starts Cowork logic parity cleanup by consolidating local Cowork state into a single frontend snapshot. Room/project/active/view state now normalizes together, persists together, and emits one Cowork storage event per action. `CoworkChatView` projects overview state is tracked in React state instead of being read ad hoc from `localStorage` during render.
+- CW-1B.5.10 makes Cowork row actions more Chat-like without touching normal Chat. Cowork chat/project three-dot menus now use inline rename and in-app dialogs for delete and change-project flows instead of browser `prompt` / `confirm`; all actions still write only Cowork localStorage.
+- CW-1B.5.11 localizes the Cowork rooms sidebar, Cowork chat shell, and Cowork projects overview labels so the new Cowork surfaces follow the frontend localization rule without editing normal Chat.
+- CW-1B.5.12 adds a one-time legacy planner current-draft migration. A meaningful old `librechat.coworkDraft.v2` draft is archived into `librechat.coworkPlanHistory.v1` before the stale current draft is cleared; existing Cowork History is preserved and Cowork Chat continues to use only its local room/project storage.
+- Cowork projects, rooms, active room, and messages remain separate from normal Chat projects, conversations, history, and APIs.
+- No AI calls, planner endpoint calls, backend persistence, file actions, tool actions, or normal Chat conversation writes yet.
 
 CW-1B.6 - CoworkChatView MVP:
 

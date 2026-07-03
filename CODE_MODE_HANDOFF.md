@@ -1,6 +1,6 @@
 # Code Mode Handoff
 
-Last updated: 2026-07-02
+Last updated: 2026-07-03
 
 This file summarizes the custom Code mode work completed in this LibreChat-based workspace so a new chat can continue without re-reading the whole conversation.
 
@@ -215,6 +215,13 @@ Current chat scope:
 - CW-1B is no longer just "make `CoworkPanel` chat-like." The target is a separate Cowork Chat mode: Cowork rooms/projects/task history on the left, and a dedicated right-side `CoworkChatView` that is separate from normal `ChatView`.
 - Current CW-1B.1 started an interim sidebar-only task prompt/result-first shell. It may be reused conceptually, but it is insufficient as the final architecture because it does not create a separate right-side Cowork chat surface and normal Chat still owns the conversation/messages on the right.
 - CW-1B.4 started the separate Cowork mode shell. Active Cowork mode now renders a right-side `CoworkChatView` placeholder instead of normal `ChatView`, with a left-side Cowork rooms placeholder. This is shell only: no AI calls, no Cowork room persistence, no backend changes, no planner endpoint changes, and no file/tool actions.
+- CW-1B.5 adds frontend-only Cowork rooms and local-only user messages in browser `localStorage` under `librechat.cowork.rooms.v1` and `librechat.cowork.activeRoomId.v1`. `CoworkChatView` now visually follows the normal Chat layout with a top header, scrollable message area, and bottom composer, but it does not import normal Chat submission, write normal conversations, call AI, call the planner endpoint, touch backend APIs, edit files, or run tools.
+- CW-1B.5.7 adds frontend-only Cowork projects and a Chat-like Cowork sidebar organization. Cowork projects persist in `librechat.cowork.projects.v1`, expanded project ids persist in `librechat.cowork.expandedProjectIds.v1`, existing Cowork rooms migrate safely with `projectId: null`, project rooms appear under their project, standalone Cowork chats stay in the Chats section with Today / Yesterday / Previous 7 days / Older grouping, and selecting any Cowork room still drives the dedicated `CoworkChatView`.
+- CW-1B.5.8 adds frontend-only Cowork row menus and a local Cowork projects overview. Cowork chat menus support local share-copy, pin/unpin, rename, duplicate, change project, archive, and delete. Cowork project menus support Open project, rename, and delete. Open project switches the dedicated `CoworkChatView` surface to a Cowork-only projects overview using `librechat.cowork.projectsView.v1` and `librechat.cowork.openProjectId.v1`; it does not navigate to or mutate normal Chat projects.
+- CW-1B.5.9 starts Cowork logic parity cleanup. `coworkRooms.ts` now treats local Cowork rooms/projects/expanded ids/active room/projects overview state as one normalized frontend snapshot, persists that snapshot together, and emits one Cowork storage event per action. This fixes projects-overview state sync so it is tracked by React state instead of ad hoc `localStorage` reads during render.
+- CW-1B.5.10 makes Cowork row action UX more closely match normal Chat without editing normal Chat. Cowork chat/project row menus no longer use browser prompt/confirm for runtime actions: rename is inline, delete uses an in-app confirmation dialog, and change-project uses an in-app project selector dialog. These remain frontend-only Cowork localStorage actions.
+- CW-1B.5.11 localizes the new Cowork rooms sidebar, Cowork chat shell, and Cowork projects overview labels. This keeps the Cowork surfaces aligned with frontend localization rules while normal Chat components remain untouched.
+- CW-1B.5.12 adds a one-time legacy planner current-draft migration. If old `librechat.coworkDraft.v2` contains meaningful content, it is archived into `librechat.coworkPlanHistory.v1` before clearing the stale current draft. Existing Cowork History is not deleted, and Cowork Chat still uses only its separate local room/project/message storage.
 - Cowork messages must be separate from normal Chat conversations and must not pollute normal Chat history. Avoid reusing the normal conversation model in the early phase unless filtering and routing are explicitly designed.
 - Use frontend-only Cowork rooms/messages in `localStorage` first for the MVP. Later, move to a backend Cowork rooms/messages API when the UI contract is stable.
 - Existing Goal, Plan, Details, Prompt Handoff, Ready checklist, planner preview, and History logic should be reused as internal or Advanced support inside Cowork Chat, not kept as the main user surface. Do not continue growing form-heavy Cowork UI.
@@ -408,7 +415,7 @@ type CoworkDraft = {
   steps: Array<{
     id: string;
     title: string;
-    status: 'todo' | 'doing' | 'done' | 'blocked';
+    status: "todo" | "doing" | "done" | "blocked";
   }>;
   suggestedFiles: string[];
   risks: string[];
@@ -1152,7 +1159,7 @@ type Source = {
   id: string;
   notebookId: string;
   title: string;
-  type: 'text' | 'markdown' | 'pdf' | 'url';
+  type: "text" | "markdown" | "pdf" | "url";
   content: string;
   sizeBytes: number;
   enabled: boolean;
