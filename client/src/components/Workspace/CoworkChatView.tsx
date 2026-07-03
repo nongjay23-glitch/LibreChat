@@ -63,6 +63,23 @@ type CoworkPlannerPayload = {
   chatProjectId?: string | null;
 };
 
+function parseCoworkCommand(value: string) {
+  const trimmedValue = value.trim();
+  const match = /^\/plan(?:\s+([\s\S]*))?$/i.exec(trimmedValue);
+
+  if (!match) {
+    return {
+      isPlanCommand: false,
+      task: "",
+    };
+  }
+
+  return {
+    isPlanCommand: true,
+    task: (match[1] ?? "").trim(),
+  };
+}
+
 function getPlannerText(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
 }
@@ -758,7 +775,12 @@ export default function CoworkChatView() {
   );
 
   const canSend = useMemo(() => {
-    return activeRoom != null && draft.trim().length > 0 && !pendingRoomId;
+    const command = parseCoworkCommand(draft);
+    return (
+      activeRoom != null &&
+      draft.trim().length > 0 &&
+      (!pendingRoomId || !command.isPlanCommand)
+    );
   }, [activeRoom, draft, pendingRoomId]);
 
   const isLandingPage = !activeRoom || activeRoom.messages.length === 0;
@@ -784,12 +806,11 @@ export default function CoworkChatView() {
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const prompt = draft.trim();
-    if (!activeRoom || !prompt || pendingRoomId) {
+    if (!activeRoom || !prompt) {
       return;
     }
 
     const roomId = activeRoom.id;
-    const model = selectedModel;
     addMessage(roomId, prompt);
     setDraft("");
     requestAnimationFrame(() => {
@@ -798,6 +819,28 @@ export default function CoworkChatView() {
       }
     });
 
+    const command = parseCoworkCommand(prompt);
+    if (!command.isPlanCommand) {
+      return;
+    }
+
+    if (!command.task) {
+      addAssistantMessage(roomId, {
+        content: "",
+        error: localize("com_ui_cowork_plan_command_empty"),
+      });
+      return;
+    }
+
+    if (pendingRoomId) {
+      addAssistantMessage(roomId, {
+        content: "",
+        error: localize("com_ui_cowork_planner_already_running"),
+      });
+      return;
+    }
+
+    const model = selectedModel;
     if (!model.endpoint) {
       addAssistantMessage(roomId, {
         content: "",
@@ -810,7 +853,7 @@ export default function CoworkChatView() {
     setPendingRoomId(roomId);
     try {
       const payload: CoworkPlannerPayload = {
-        goal: prompt,
+        goal: command.task,
         scope: [],
         exclusions: [],
         steps: [],
@@ -991,8 +1034,8 @@ function CoworkComposer({
                   rows={1}
                   onFocus={() => setIsTextAreaFocused(true)}
                   onBlur={() => setIsTextAreaFocused(false)}
-                  aria-label={`${localize("com_endpoint_message")} ${localize("com_ui_cowork")}`}
-                  placeholder={`${localize("com_endpoint_message")} ${localize("com_ui_cowork")}`}
+                  aria-label={localize("com_ui_cowork_message_or_plan")}
+                  placeholder={localize("com_ui_cowork_message_or_plan")}
                   style={{ height: 44, overflowY: "auto" }}
                   className={cn(
                     baseClasses,
