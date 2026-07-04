@@ -39,6 +39,9 @@ const MAX_COWORK_CODEX_PROMPT_LENGTH = 6000;
 const MAX_COWORK_LIST_ITEMS = 24;
 const MAX_COWORK_STEPS = 12;
 const MAX_COWORK_DECISION_OPTIONS = 4;
+const MAX_COWORK_DECISION_QUESTION_LENGTH = 180;
+const MAX_COWORK_DECISION_OPTION_LABEL_LENGTH = 80;
+const MAX_COWORK_DECISION_OPTION_DESCRIPTION_LENGTH = 220;
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_READONLY_ROOT || '/readonly-workspace');
 const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
   ? path.resolve(process.env.WORKSPACE_WRITE_ROOT)
@@ -78,8 +81,10 @@ const COWORK_GENERIC_PLAN_PATTERN =
   /\b(improve|optimize|handle|implement feature|review code|test thoroughly|fix bugs|make it better|do the task|check everything|update things)\b/i;
 const COWORK_SPECIFIC_ANCHOR_PATTERN =
   /\/|\.[a-z0-9]{1,8}\b|localStorage|endpoint|route|payload|schema|state|history|conversation|message|room|project|model|planner|sidebar|composer|backend|frontend|api|UI|Chat|Cowork|Code|Notebook|Sources|sandbox|diff|verify|test|expected|avoid|scope|risk/i;
+const COWORK_PROMPT_LEAK_PATTERN =
+  /Original requirement topic|Decision question|User answer|Continue \/ask|Continue \/plan|Cowork draft|Required JSON schema|quality contract|strict JSON/i;
 const COWORK_PLANNER_RESPONSE_SCHEMA =
-  '{"responseMode":"plan|decision","goal":"string","currentUnderstanding":"string","clarifyingQuestions":["string"],"scope":["string"],"exclusions":["string"],"steps":[{"title":"string","status":"todo"}],"inspectFiles":["string"],"suggestedFiles":["string"],"avoidFiles":["string"],"risks":["string"],"verification":["string"],"nextAction":"string","codexPrompt":"string","decision":{"question":"string","reason":"string","impact":"string","recommendedOptionId":"string","options":[{"id":"string","label":"string","description":"string"}],"allowCustomAnswer":true}}';
+  '{"intent":"plan|ask","responseMode":"plan|decision","goal":"string","currentUnderstanding":"string","clarifyingQuestions":["string"],"scope":["string"],"exclusions":["string"],"steps":[{"title":"string","status":"todo"}],"inspectFiles":["string"],"suggestedFiles":["string"],"avoidFiles":["string"],"risks":["string"],"verification":["string"],"nextAction":"string","codexPrompt":"string","decision":{"question":"string","reason":"string","impact":"string","recommendedOptionId":"string","options":[{"id":"string","label":"string","description":"string"}],"allowCustomAnswer":true}}';
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -229,6 +234,40 @@ function sanitizeCoworkText(value, maxLength = MAX_COWORK_STRING_LENGTH) {
   return trimmed.slice(0, maxLength);
 }
 
+function sanitizeCoworkDecisionQuestion(value) {
+  let text = sanitizeCoworkText(value, 600);
+  if (!text) {
+    return '';
+  }
+
+  const lastQuestionMarker = Math.max(
+    text.lastIndexOf('Decision question:'),
+    text.lastIndexOf('คำถาม:'),
+  );
+  if (lastQuestionMarker >= 0) {
+    text = text.slice(lastQuestionMarker).replace(/^Decision question:\s*/i, '').replace(/^คำถาม:\s*/i, '');
+  }
+
+  const stopIndex = [
+    'User answer:',
+    'Continue /ask',
+    'Continue /plan',
+    'Original planner request:',
+    'Original requirement topic:',
+    'Cowork draft:',
+    'Required JSON schema:',
+  ]
+    .map((marker) => text.indexOf(marker))
+    .filter((index) => index > 0)
+    .sort((a, b) => a - b)[0];
+
+  if (stopIndex) {
+    text = text.slice(0, stopIndex);
+  }
+
+  return text.replace(/\s+/g, ' ').trim().slice(0, MAX_COWORK_DECISION_QUESTION_LENGTH);
+}
+
 function sanitizeCoworkList(value, maxLength = MAX_COWORK_STRING_LENGTH) {
   if (!Array.isArray(value)) {
     return [];
@@ -237,6 +276,10 @@ function sanitizeCoworkList(value, maxLength = MAX_COWORK_STRING_LENGTH) {
     .map((item) => sanitizeCoworkText(item, maxLength))
     .filter(Boolean)
     .slice(0, MAX_COWORK_LIST_ITEMS);
+}
+
+function getCoworkLanguageHint(value) {
+  return value === 'th' ? 'th' : 'en';
 }
 
 function uniqueCoworkList(items = []) {
@@ -284,8 +327,11 @@ function sanitizeCoworkDecision(value) {
     ? value.options
         .map((option, index) => {
           const id = sanitizeCoworkText(option?.id, 80) || `option-${index + 1}`;
-          const label = sanitizeCoworkText(option?.label, 160);
-          const description = sanitizeCoworkText(option?.description, 500);
+          const label = sanitizeCoworkText(option?.label, MAX_COWORK_DECISION_OPTION_LABEL_LENGTH);
+          const description = sanitizeCoworkText(
+            option?.description,
+            MAX_COWORK_DECISION_OPTION_DESCRIPTION_LENGTH,
+          );
           if (!label || !description) {
             return null;
           }
@@ -299,9 +345,9 @@ function sanitizeCoworkDecision(value) {
   const recommendedOptionId = sanitizeCoworkText(value.recommendedOptionId, 80);
 
   const decision = {
-    question: sanitizeCoworkText(value.question),
-    reason: sanitizeCoworkText(value.reason),
-    impact: sanitizeCoworkText(value.impact),
+    question: sanitizeCoworkDecisionQuestion(value.question),
+    reason: sanitizeCoworkText(value.reason, 260),
+    impact: sanitizeCoworkText(value.impact, 220),
     recommendedOptionId: optionIds.has(recommendedOptionId) ? recommendedOptionId : '',
     options,
     allowCustomAnswer: value.allowCustomAnswer !== false,
@@ -316,7 +362,10 @@ function sanitizeCoworkDecision(value) {
 
 function sanitizeCoworkDraft(value = {}) {
   return {
+    intent: value.intent === 'ask' ? 'ask' : 'plan',
     goal: sanitizeCoworkText(value.goal),
+    languageHint: getCoworkLanguageHint(value.languageHint),
+    avoidQuestions: sanitizeCoworkList(value.avoidQuestions, 360).slice(-8),
     scope: sanitizeCoworkList(value.scope),
     exclusions: sanitizeCoworkList(value.exclusions),
     steps: sanitizeCoworkSteps(value.steps),
@@ -343,6 +392,7 @@ function formatCoworkSteps(steps = []) {
 }
 
 function createCoworkPlannerPrompt(draft) {
+  const isAskIntent = draft.intent === 'ask';
   return [
     'You are Cowork AI Planner.',
     'You are read-only.',
@@ -355,24 +405,37 @@ function createCoworkPlannerPrompt(draft) {
     'You do not use Notebook sources.',
     'You do not use source chunks.',
     'You only use the Cowork draft provided in this request.',
-    'You produce a structured plan.',
+    isAskIntent
+      ? 'You produce one requirement/implementation decision question.'
+      : 'You produce a structured plan.',
     'You keep scope small.',
     'You ask clarifying questions when needed.',
     'You prepare a Codex/Code handoff prompt.',
     'Code mode remains the only place for project-file context, patch review, apply, checkpoint, restore, and verification.',
-    'Normal Cowork chat is for ordinary conversation. This planner is only for explicit /plan requests and must produce a high-quality implementation handoff.',
+    'Normal Cowork chat is for ordinary conversation. This planner is only for explicit /ask or /plan requests.',
+    '/ask is requirement-question mode. It must ask one high-impact question at a time and must not return a full plan, Codex prompt, or implementation checklist.',
+    '/plan is planning mode. It may ask one decision only when guessing would materially change scope or implementation direction; otherwise it must produce a high-quality implementation handoff.',
     'Return strict JSON only matching the requested schema.',
     'Do not include secrets, provider config, API keys, or full source content.',
     'Do not say Cowork ran terminal commands. Verification and codexPrompt may propose checks for Code mode or the user to run, but must clearly be proposed checks, not actions already performed.',
     'Treat these paths as unsafe and never recommend editing them: .env, token, password, credential, .git, node_modules, logs, uploads, database files, binary files, provider config files containing secrets.',
     '',
     'Quality contract:',
-    '- Use the same language as the user input when practical.',
+    '- Output language must follow the Cowork draft language hint.',
+    '- If language hint is "th", all user-facing question, reason, impact, option labels, option descriptions, plan sections, and nextAction must be Thai unless a short technical term is unavoidable.',
+    '- Never repeat or lightly rephrase any question listed in "Questions already asked".',
     '- Do not invent repository facts, file names, APIs, routes, or implementation details that are not present in the draft. If details are missing, say they are unknown.',
-    '- responseMode must be "plan" when enough information exists to make a useful scoped plan.',
-    '- responseMode may be "decision" only when one missing decision would materially change the plan and unsafe guessing would likely send implementation in the wrong direction.',
-    '- Do not ask a decision question just because the schema supports it. If a safe default exists, state the assumption and return a plan.',
-    '- For responseMode "decision", ask exactly one highest-impact question. Provide 2-4 concrete options plus allowCustomAnswer true. Every option must change scope, architecture, risk, or next implementation step.',
+    '- intent must echo the requested mode: "ask" for /ask and "plan" for /plan.',
+    '- For /ask, responseMode must be "decision". Ask exactly one highest-impact requirement or implementation question. Do not produce a plan card, Codex prompt, or broad checklist.',
+    '- For /ask, if the topic already has enough detail, ask whether to continue gathering details, narrow scope, or switch to /plan. Do not switch to plan by yourself.',
+    '- For /plan, responseMode must be "plan" when enough information exists to make a useful scoped plan.',
+    '- For /plan, responseMode may be "decision" only when one missing decision would materially change the plan and unsafe guessing would likely send implementation in the wrong direction.',
+    '- For /plan, do not ask a decision question just because the schema supports it. If a safe default exists, state the assumption and return a plan.',
+    '- For responseMode "decision", ask exactly one highest-impact question. The question must be short, direct, and ask one thing only. Put explanation in reason/impact, not in the question.',
+    '- Decision question target: 1 sentence, 8-22 words, no compound lists, no repeated context, no previous prompt text.',
+    '- decision.question must contain only the final user-facing question. Do not include original topic labels, previous answers, schema wording, JSON instructions, or internal planner instructions.',
+    '- decision.reason and decision.impact must each be one short sentence. Keep details in option descriptions.',
+    '- Provide 2-4 concrete options plus allowCustomAnswer true. Option labels must be short; option descriptions carry the detail. Every option must change scope, architecture, risk, or next implementation step.',
     '- currentUnderstanding must summarize the concrete goal, known constraints, current phase, and important unknowns. It must not be a vague restatement.',
     '- clarifyingQuestions must contain only questions that unblock implementation decisions. Prefer 0-5 questions. Do not ask generic questions when the next step is already clear.',
     '- scope must describe concrete included work for this phase. Each item should be specific enough to review.',
@@ -385,9 +448,15 @@ function createCoworkPlannerPrompt(draft) {
     '- Prefer fewer, sharper items over long generic lists.',
     '',
     'Required JSON schema:',
-    '{"goal":"string","currentUnderstanding":"string","clarifyingQuestions":["string"],"scope":["string"],"exclusions":["string"],"steps":[{"title":"string","status":"todo"}],"inspectFiles":["string"],"suggestedFiles":["string"],"avoidFiles":["string"],"risks":["string"],"verification":["string"],"nextAction":"string","codexPrompt":"string"}',
+    COWORK_PLANNER_RESPONSE_SCHEMA,
     '',
     'Cowork draft:',
+    `Intent:\n${draft.intent}`,
+    '',
+    `Language hint:\n${draft.languageHint}`,
+    '',
+    `Questions already asked:\n${formatCoworkList(draft.avoidQuestions)}`,
+    '',
     `Goal:\n${draft.goal || 'none provided'}`,
     '',
     `Scope:\n${formatCoworkList(draft.scope)}`,
@@ -472,6 +541,89 @@ function unwrapCoworkJson(rawText = '') {
   return text;
 }
 
+function extractBalancedCoworkJsonObjects(value = '') {
+  const text = String(value);
+  const objects = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') {
+      if (depth === 0) {
+        start = index;
+      }
+      depth += 1;
+      continue;
+    }
+
+    if (char !== '}' || depth === 0) {
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0 && start >= 0) {
+      objects.push(text.slice(start, index + 1));
+      start = -1;
+    }
+  }
+
+  return objects;
+}
+
+function getCoworkJsonCandidates(rawText = '') {
+  const text = String(rawText).trim();
+  const candidates = [unwrapCoworkJson(text)];
+  const fencedPattern = /```(?:json)?\s*([\s\S]*?)```/gi;
+  let fenced;
+
+  while ((fenced = fencedPattern.exec(text)) !== null) {
+    candidates.push(fenced[1].trim());
+  }
+
+  for (const candidate of [text, ...candidates]) {
+    candidates.push(...extractBalancedCoworkJsonObjects(candidate));
+  }
+
+  return [...new Set(candidates.map((candidate) => candidate.trim()).filter(Boolean))];
+}
+
+function parseCoworkJsonObject(rawText = '') {
+  for (const candidate of getCoworkJsonCandidates(rawText)) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // Try the next candidate before declaring the model response unusable.
+    }
+  }
+
+  const error = new Error('Cowork planner returned invalid JSON.');
+  error.status = 502;
+  throw error;
+}
+
 function hasSuspiciousCoworkPlannerContent(planner) {
   const textParts = [
     planner.goal,
@@ -554,12 +706,93 @@ function hasUsefulUnderstanding(planner) {
   return hasCoworkSpecificAnchor(text) || planner.scope.length > 0 || planner.exclusions.length > 0;
 }
 
-function validateCoworkPlannerQuality(planner) {
+function isOverloadedCoworkDecisionQuestion(value = '') {
+  const text = String(value).trim();
+  if (text.length > MAX_COWORK_DECISION_QUESTION_LENGTH) {
+    return true;
+  }
+  if (getCoworkWordCount(text) > 28) {
+    return true;
+  }
+  const clauseCount = (text.match(/,|;|\/| และ | and | หรือ | or /gi) || []).length;
+  return clauseCount > 3;
+}
+
+function hasThaiCoworkText(value = '') {
+  return /[\u0E00-\u0E7F]/.test(String(value));
+}
+
+function isWrongCoworkPlannerLanguage(planner, languageHint = 'en') {
+  if (languageHint !== 'th') {
+    return false;
+  }
+
+  if (planner.responseMode === 'decision' && planner.decision) {
+    const decisionText = [
+      planner.decision.question,
+      planner.decision.reason,
+      planner.decision.impact,
+      ...planner.decision.options.flatMap((option) => [option.label, option.description]),
+    ].join(' ');
+    return !hasThaiCoworkText(decisionText);
+  }
+
+  return !hasThaiCoworkText(
+    [
+      planner.goal,
+      planner.currentUnderstanding,
+      planner.nextAction,
+      ...planner.clarifyingQuestions,
+      ...planner.scope,
+      ...planner.exclusions,
+      ...planner.risks,
+      ...planner.verification,
+      ...planner.steps.map((step) => step.title),
+    ].join(' '),
+  );
+}
+
+function normalizeCoworkQuestion(value = '') {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .trim();
+}
+
+function isRepeatedCoworkQuestion(question = '', avoidQuestions = []) {
+  const normalized = normalizeCoworkQuestion(question);
+  if (!normalized) {
+    return false;
+  }
+
+  return avoidQuestions.some((item) => {
+    const previous = normalizeCoworkQuestion(item);
+    return (
+      previous &&
+      (normalized === previous || normalized.includes(previous) || previous.includes(normalized))
+    );
+  });
+}
+
+function validateCoworkPlannerQuality(planner, intent = 'plan', draft = {}) {
   const blocking = [];
   const warnings = [];
 
+  if (isWrongCoworkPlannerLanguage(planner, draft.languageHint)) {
+    blocking.push('planner output must use the requested language');
+  }
+
+  if (intent === 'ask' && planner.responseMode !== 'decision') {
+    blocking.push('/ask must return responseMode "decision" with one requirement question');
+    return { blocking, warnings };
+  }
+
   if (planner.responseMode === 'decision') {
-    return validateCoworkPlannerDecisionQuality(planner);
+    const decisionQuality = validateCoworkPlannerDecisionQuality(planner, draft);
+    return {
+      blocking: [...blocking, ...decisionQuality.blocking],
+      warnings: [...warnings, ...decisionQuality.warnings],
+    };
   }
 
   if (!hasUsefulUnderstanding(planner)) {
@@ -615,7 +848,7 @@ function validateCoworkPlannerQuality(planner) {
   return { blocking, warnings };
 }
 
-function validateCoworkPlannerDecisionQuality(planner) {
+function validateCoworkPlannerDecisionQuality(planner, draft = {}) {
   const blocking = [];
   const warnings = [];
   const decision = planner.decision;
@@ -627,6 +860,15 @@ function validateCoworkPlannerDecisionQuality(planner) {
 
   if (isLowInformationCoworkItem(decision.question)) {
     blocking.push('decision question lacks concrete implementation impact');
+  }
+  if (isOverloadedCoworkDecisionQuestion(decision.question)) {
+    blocking.push('decision question must be short and ask one thing only');
+  }
+  if (isRepeatedCoworkQuestion(decision.question, draft.avoidQuestions)) {
+    blocking.push('decision question repeats an already answered question');
+  }
+  if (COWORK_PROMPT_LEAK_PATTERN.test(decision.question)) {
+    blocking.push('decision question includes internal prompt text');
   }
   if (isLowInformationCoworkItem(decision.reason)) {
     blocking.push('decision reason does not explain why guessing is unsafe');
@@ -645,10 +887,10 @@ function validateCoworkPlannerDecisionQuality(planner) {
   }
 
   const weakOption = decision.options.find(
-    (option) => isLowInformationCoworkItem(option.label) || isLowInformationCoworkItem(option.description),
+    (option) => !option.label.trim() || isLowInformationCoworkItem(option.description),
   );
   if (weakOption) {
-    blocking.push('decision options must include concrete labels and descriptions');
+    blocking.push('decision options must include labels and concrete descriptions');
   }
 
   if (
@@ -661,19 +903,351 @@ function validateCoworkPlannerDecisionQuality(planner) {
   return { blocking, warnings };
 }
 
-function parseCoworkPlannerResponse(rawText = '') {
-  let parsed;
-  try {
-    parsed = JSON.parse(unwrapCoworkJson(rawText));
-  } catch {
-    const error = new Error('Cowork planner returned invalid JSON.');
-    error.status = 502;
-    throw error;
+function compactCoworkTaskLabel(value = '') {
+  return String(value).replace(/\s+/g, ' ').trim();
+}
+
+function extractCoworkDisplayGoal(value = '') {
+  let text = String(value).trim();
+  const originalPattern =
+    /Original (?:requirement topic|goal):\s*([\s\S]*?)(?:\n\n(?:Decision question|User answer|Continue)|$)/i;
+
+  for (let index = 0; index < 4; index += 1) {
+    const match = text.match(originalPattern);
+    if (!match) {
+      break;
+    }
+    text = match[1].trim();
   }
 
+  text = text
+    .replace(/^Original (?:requirement topic|goal):\s*/i, '')
+    .split(/\n\n(?:Decision question|User answer|Continue)/i)[0]
+    .split(/\bContinue the \/(?:ask|plan)\b/i)[0];
+
+  const compacted = compactCoworkTaskLabel(text);
+  if (!compacted) {
+    return 'Cowork task';
+  }
+  if (compacted.length <= 90) {
+    return compacted;
+  }
+  return `${compacted.slice(0, 87).trim()}...`;
+}
+
+function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
+  const fallbackDecisions = isThai
+    ? [
+        {
+          question: 'เริ่มจาก Workflow, Admin, หรือ MVP ก่อน?',
+          reason: `หัวข้อ: ${goal}`,
+          impact: 'คำตอบนี้จะกำหนดว่าคำถามถัดไปควรเจาะ workflow, ข้อมูล, หรือขอบเขตงานก่อน.',
+          recommendedOptionId: 'workflow',
+          options: [
+            {
+              id: 'workflow',
+              label: 'Workflow หน้างาน',
+              description: 'เริ่มจากลำดับการใช้งานจริงของลูกค้า พนักงาน ครัว หรือแอดมิน.',
+            },
+            {
+              id: 'data-admin',
+              label: 'ข้อมูลและ Admin',
+              description: 'เริ่มจากข้อมูลที่ต้องเก็บ หน้าจัดการ รายงาน และสิทธิ์การใช้งาน.',
+            },
+            {
+              id: 'mvp-scope',
+              label: 'ขอบเขต MVP',
+              description: 'เริ่มจากฟีเจอร์ที่ต้องมีในเวอร์ชันแรก และสิ่งที่ยังไม่ทำ.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+        {
+          question: 'ผู้ใช้หลักของระบบนี้คือใคร?',
+          reason: `หัวข้อ: ${goal}`,
+          impact: 'บทบาทผู้ใช้จะเปลี่ยน workflow, หน้าจอ, สิทธิ์, และข้อมูลที่ต้องเก็บ.',
+          recommendedOptionId: 'staff',
+          options: [
+            {
+              id: 'staff',
+              label: 'พนักงานหน้างาน',
+              description: 'เน้น flow รับออเดอร์ ทำงานเร็ว และลดความผิดพลาดระหว่างวัน.',
+            },
+            {
+              id: 'owner',
+              label: 'เจ้าของหรือแอดมิน',
+              description: 'เน้นตั้งค่า ดูรายงาน จัดการข้อมูล และติดตามภาพรวมธุรกิจ.',
+            },
+            {
+              id: 'customer',
+              label: 'ลูกค้า',
+              description: 'เน้นประสบการณ์สั่งซื้อ จอง ชำระเงิน หรือดูสถานะด้วยตัวเอง.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+        {
+          question: 'ข้อมูลวันแรกต้องเก็บอะไรบ้าง?',
+          reason: `หัวข้อ: ${goal}`,
+          impact: 'ข้อมูลตั้งต้นจะกำหนด schema, หน้ากรอกข้อมูล, รายงาน, และงานที่ทำได้ใน MVP.',
+          recommendedOptionId: 'orders',
+          options: [
+            {
+              id: 'orders',
+              label: 'ออเดอร์และสถานะ',
+              description: 'เก็บรายการสั่งซื้อ สถานะ เวลา และผู้รับผิดชอบก่อน.',
+            },
+            {
+              id: 'catalog',
+              label: 'สินค้าและราคา',
+              description: 'เก็บเมนู สินค้า ราคา หมวดหมู่ และตัวเลือกเสริมก่อน.',
+            },
+            {
+              id: 'reports',
+              label: 'ยอดขายและรายงาน',
+              description: 'เก็บข้อมูลที่ต้องใช้สรุปยอด รายวัน รายเดือน หรือสต๊อกก่อน.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+        {
+          question: 'MVP รอบแรกไม่ทำอะไรบ้าง?',
+          reason: `หัวข้อ: ${goal}`,
+          impact: 'การตัดสิ่งที่ยังไม่ทำช่วยลด scope และทำให้แผนแรกนำไปทำจริงได้.',
+          recommendedOptionId: 'external-integrations',
+          options: [
+            {
+              id: 'external-integrations',
+              label: 'ตัดระบบภายนอก',
+              description: 'ยังไม่เชื่อมชำระเงิน ขนส่ง บัญชี หรือระบบอื่นในรอบแรก.',
+            },
+            {
+              id: 'advanced-reporting',
+              label: 'ตัดรายงานขั้นสูง',
+              description: 'ทำเฉพาะรายงานจำเป็น ยังไม่ทำ analytics ลึกหรือ dashboard ซับซ้อน.',
+            },
+            {
+              id: 'multi-branch',
+              label: 'ตัดหลายสาขา',
+              description: 'เริ่มจากร้านเดียวหรือ flow เดียวก่อน แล้วค่อยขยายหลายสาขา.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+      ]
+    : [
+        {
+          question: 'Start with workflow, Admin, or MVP scope first?',
+          reason: `Topic: ${goal}`,
+          impact: 'This decides whether the next question should focus on workflow, data, or scope.',
+          recommendedOptionId: 'workflow',
+          options: [
+            {
+              id: 'workflow',
+              label: 'User workflow',
+              description: 'Start with the real user journey, roles, and daily flow.',
+            },
+            {
+              id: 'data-admin',
+              label: 'Data and Admin',
+              description: 'Start with stored data, admin screens, reports, and permissions.',
+            },
+            {
+              id: 'mvp-scope',
+              label: 'MVP scope',
+              description: 'Start with first-version features and explicit exclusions.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+        {
+          question: 'Who is the primary user for this system?',
+          reason: `Topic: ${goal}`,
+          impact: 'The main role changes workflows, screens, permissions, and stored data.',
+          recommendedOptionId: 'staff',
+          options: [
+            {
+              id: 'staff',
+              label: 'Frontline staff',
+              description: 'Optimize for fast daily operation and fewer mistakes.',
+            },
+            {
+              id: 'owner',
+              label: 'Owner or Admin',
+              description: 'Optimize for setup, reports, data management, and oversight.',
+            },
+            {
+              id: 'customer',
+              label: 'Customer',
+              description: 'Optimize for ordering, booking, payment, or self-service status.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+        {
+          question: 'What data must be stored on day one?',
+          reason: `Topic: ${goal}`,
+          impact: 'Day-one data drives schema, input screens, reports, and MVP behavior.',
+          recommendedOptionId: 'orders',
+          options: [
+            {
+              id: 'orders',
+              label: 'Orders and status',
+              description: 'Store orders, status, timestamps, and owner first.',
+            },
+            {
+              id: 'catalog',
+              label: 'Catalog and pricing',
+              description: 'Store products, menus, prices, categories, and modifiers first.',
+            },
+            {
+              id: 'reports',
+              label: 'Sales and reports',
+              description: 'Store the data needed for daily, monthly, or inventory summaries first.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+        {
+          question: 'What is excluded from the first MVP?',
+          reason: `Topic: ${goal}`,
+          impact: 'Clear exclusions reduce scope and make the first implementation plan usable.',
+          recommendedOptionId: 'external-integrations',
+          options: [
+            {
+              id: 'external-integrations',
+              label: 'External integrations',
+              description: 'Skip payment, shipping, accounting, or other external systems first.',
+            },
+            {
+              id: 'advanced-reporting',
+              label: 'Advanced reporting',
+              description: 'Keep only essential reports and skip deep analytics first.',
+            },
+            {
+              id: 'multi-branch',
+              label: 'Multi-branch support',
+              description: 'Start with one shop or one workflow before expanding branches.',
+            },
+          ],
+          allowCustomAnswer: true,
+        },
+      ];
+
+  return (
+    fallbackDecisions.find((decision) => !isRepeatedCoworkQuestion(decision.question, avoidQuestions)) ??
+    fallbackDecisions[fallbackDecisions.length - 1]
+  );
+}
+function createFallbackCoworkPlanner(draft = {}) {
+  const goal = extractCoworkDisplayGoal(draft.goal || 'Cowork task');
+  const isThai = draft.languageHint === 'th' || /[\u0E00-\u0E7F]/.test(goal);
+  const intent = draft.intent === 'ask' ? 'ask' : 'plan';
+
+  if (intent === 'ask') {
+    return {
+      intent,
+      responseMode: 'decision',
+      goal,
+      currentUnderstanding: isThai
+        ? `ผู้ใช้ต้องการเก็บ requirement สำหรับ ${goal} แต่โมเดลไม่คืน JSON ที่อ่านได้ จึงใช้คำถาม fallback ที่ปลอดภัยเพื่อเก็บข้อมูลสำคัญก่อนทำแผน.`
+        : `The user wants requirements for ${goal}, but the model did not return valid JSON, so Cowork is asking one safe clarifying question first.`,
+      clarifyingQuestions: [],
+      scope: [],
+      exclusions: [],
+      steps: [],
+      inspectFiles: [],
+      suggestedFiles: [],
+      avoidFiles: COWORK_DEFAULT_AVOID_FILES,
+      risks: [],
+      verification: [],
+      nextAction: isThai
+        ? 'ตอบตัวเลือกที่มีผลต่อ requirement มากที่สุด หรือพิมพ์คำตอบเอง.'
+        : 'Choose the option that most affects requirements, or type a custom answer.',
+      codexPrompt: '',
+      decision: createFallbackCoworkDecision(goal, isThai, draft.avoidQuestions),
+    };
+  }
+
+  return {
+    intent,
+    responseMode: 'plan',
+    goal,
+    currentUnderstanding: isThai
+      ? `ผู้ใช้ต้องการแผนสำหรับ ${goal}. โมเดลไม่คืน JSON ที่อ่านได้ จึงใช้ fallback plan ที่ปลอดภัย โดยไม่อ้างว่าตรวจ repo หรือแก้ไฟล์แล้ว.`
+      : `The user wants a plan for ${goal}. The model did not return valid JSON, so Cowork is using a safe fallback plan without claiming repo inspection or file changes.`,
+    clarifyingQuestions: isThai
+      ? [
+          'MVP เวอร์ชันแรกต้องรองรับผู้ใช้หรือบทบาทใดบ้าง?',
+          'ข้อมูลหลักที่ต้องเก็บตั้งแต่วันแรกมีอะไรบ้าง?',
+          'มีระบบใดที่ต้องกันออกจาก scope รอบนี้หรือไม่?',
+        ]
+      : [
+          'Which user roles must the first MVP support?',
+          'Which core data must be stored on day one?',
+          'Which systems should stay out of scope for this phase?',
+        ],
+    scope: isThai
+      ? [
+          `กำหนด MVP scope สำหรับ ${goal}`,
+          'แยก workflow หลักของผู้ใช้ หน้างาน และ Admin',
+          'กำหนด data model/API boundary โดยไม่แตะ normal Chat, Notebook, Sources หรือ Code mode',
+        ]
+      : [
+          `Define MVP scope for ${goal}`,
+          'Separate the main user, operator, and Admin workflows',
+          'Define data model/API boundaries without touching normal Chat, Notebook, Sources, or Code mode',
+        ],
+    exclusions: [
+      'Do not edit files from Cowork.',
+      'Do not run terminal commands from Cowork.',
+      'Do not write normal Chat conversations or messages.',
+      'Do not touch Notebook, Sources, Code mode, sandbox, or tool execution.',
+    ],
+    steps: [
+      { title: 'Audit the current relevant UI/API boundary before editing', status: 'todo' },
+      { title: 'Define the smallest MVP workflow and data shape for this request', status: 'todo' },
+      { title: 'Implement one narrow frontend/backend slice with protected normal Chat state', status: 'todo' },
+      { title: 'Run targeted verification and manual Cowork-only checks', status: 'todo' },
+    ],
+    inspectFiles: [],
+    suggestedFiles: [],
+    avoidFiles: COWORK_DEFAULT_AVOID_FILES,
+    risks: [
+      'Scope can expand if Admin, customer, and reporting workflows are implemented in one phase.',
+      'Normal Chat history could be polluted if Cowork reuses normal Chat submit or conversation writes.',
+      'Planner quality can degrade when the selected model ignores JSON output instructions.',
+    ],
+    verification: [
+      'Confirm Cowork messages stay out of normal Chat history.',
+      'Confirm only Cowork planner/chat endpoints are called from Cowork commands.',
+      'Run formatting, diff check, build api, restart api, and readyz after code changes.',
+    ],
+    nextAction: isThai
+      ? 'ตอบคำถาม clarifying ที่สำคัญที่สุดก่อน แล้วค่อยให้ Code mode ทำ phase แรกแบบแคบ.'
+      : 'Answer the highest-impact clarifying question first, then hand one narrow phase to Code mode.',
+    codexPrompt: [
+      'You are working inside the LibreChat repo.',
+      `Task: implement the first narrow phase for ${goal}.`,
+      'Strict scope: inspect only the relevant Cowork files and avoid broad refactors.',
+      'Files: identify likely Cowork frontend/backend files before editing; do not touch normal Chat unless required for read-only reference.',
+      'Avoid: Notebook, Sources, Code mode apply/checkpoint/rollback/verify, sandbox, terminal/tool execution, normal Chat conversation writes.',
+      'Required behavior: keep Cowork separate from normal Chat and preserve existing localStorage behavior.',
+      'Checks: run prettier on touched files, git diff --check, docker compose -f docker-compose.local.yml build api --progress=plain, docker compose -f docker-compose.local.yml up -d api, and readyz.',
+      'Final report: summarize files changed, behavior added, protected areas not touched, checks run, readyz result, and final git status.',
+    ].join('\n'),
+    decision: null,
+  };
+}
+
+function parseCoworkPlannerResponse(rawText = '', fallbackIntent = 'plan') {
+  const parsed = parseCoworkJsonObject(rawText);
+
   const decision = sanitizeCoworkDecision(parsed.decision);
+  const intent = parsed.intent === 'ask' || fallbackIntent === 'ask' ? 'ask' : 'plan';
   const responseMode = parsed.responseMode === 'decision' && decision ? 'decision' : 'plan';
   const planner = {
+    intent,
     responseMode,
     goal: sanitizeCoworkText(parsed.goal),
     currentUnderstanding: sanitizeCoworkText(parsed.currentUnderstanding),
@@ -1925,9 +2499,10 @@ router.post(
       const text = extractCompletionText(completion);
 
       if (!text) {
-        return res.status(502).json({
-          ok: false,
-          error: 'Cowork planner returned an empty response.',
+        warnings.push('Cowork planner returned an empty response; using safe fallback output.');
+        return res.json({
+          ok: true,
+          planner: createFallbackCoworkPlanner(req.coworkPlannerDraft),
           warnings,
         });
       }
@@ -1935,7 +2510,7 @@ router.post(
       let planner;
       let plannerText = text;
       try {
-        planner = parseCoworkPlannerResponse(plannerText);
+        planner = parseCoworkPlannerResponse(plannerText, req.coworkPlannerDraft?.intent);
       } catch (error) {
         if (!isCoworkPlannerInvalidJsonError(error)) {
           throw error;
@@ -1951,18 +2526,29 @@ router.post(
         });
 
         if (!repairText) {
-          return res.status(502).json({
-            ok: false,
-            error: 'Cowork planner JSON repair returned an empty response.',
-            warnings,
-          });
+          warnings.push(
+            'Cowork planner JSON repair returned an empty response; using safe fallback output.',
+          );
+          planner = createFallbackCoworkPlanner(req.coworkPlannerDraft);
+        } else {
+          plannerText = repairText;
+          try {
+            planner = parseCoworkPlannerResponse(plannerText, req.coworkPlannerDraft?.intent);
+          } catch (repairError) {
+            if (!isCoworkPlannerInvalidJsonError(repairError)) {
+              throw repairError;
+            }
+            warnings.push('Cowork planner returned invalid JSON after repair; using safe fallback output.');
+            planner = createFallbackCoworkPlanner(req.coworkPlannerDraft);
+          }
         }
-
-        plannerText = repairText;
-        planner = parseCoworkPlannerResponse(plannerText);
       }
 
-      let quality = validateCoworkPlannerQuality(planner);
+      let quality = validateCoworkPlannerQuality(
+        planner,
+        req.coworkPlannerDraft?.intent,
+        req.coworkPlannerDraft,
+      );
       if (quality.blocking.length > 0) {
         const retryText = await sendCoworkPlannerFollowup({
           abortController,
@@ -1972,50 +2558,70 @@ router.post(
           userMCPAuthMap,
         });
         if (!retryText) {
-          return res.status(502).json({
-            ok: false,
-            error: 'Cowork planner retry returned an empty response.',
-            warnings,
-          });
-        }
+          warnings.push('Cowork planner retry returned an empty response; using safe fallback output.');
+          planner = createFallbackCoworkPlanner(req.coworkPlannerDraft);
+        } else {
+          plannerText = retryText;
+          try {
+            planner = parseCoworkPlannerResponse(plannerText, req.coworkPlannerDraft?.intent);
+          } catch (error) {
+            if (!isCoworkPlannerInvalidJsonError(error)) {
+              throw error;
+            }
 
-        plannerText = retryText;
-        try {
-          planner = parseCoworkPlannerResponse(plannerText);
-        } catch (error) {
-          if (!isCoworkPlannerInvalidJsonError(error)) {
-            throw error;
-          }
-
-          const repairText = await sendCoworkPlannerFollowup({
-            abortController,
-            client,
-            conversationId,
-            prompt: createCoworkPlannerJsonRepairPrompt(prompt, plannerText, error.message),
-            userMCPAuthMap,
-          });
-
-          if (!repairText) {
-            return res.status(502).json({
-              ok: false,
-              error: 'Cowork planner retry JSON repair returned an empty response.',
-              warnings,
+            const repairText = await sendCoworkPlannerFollowup({
+              abortController,
+              client,
+              conversationId,
+              prompt: createCoworkPlannerJsonRepairPrompt(prompt, plannerText, error.message),
+              userMCPAuthMap,
             });
-          }
 
-          plannerText = repairText;
-          planner = parseCoworkPlannerResponse(plannerText);
+            if (!repairText) {
+              warnings.push(
+                'Cowork planner retry JSON repair returned an empty response; using safe fallback output.',
+              );
+              planner = createFallbackCoworkPlanner(req.coworkPlannerDraft);
+            } else {
+              plannerText = repairText;
+              try {
+                planner = parseCoworkPlannerResponse(plannerText, req.coworkPlannerDraft?.intent);
+              } catch (repairError) {
+                if (!isCoworkPlannerInvalidJsonError(repairError)) {
+                  throw repairError;
+                }
+                warnings.push(
+                  'Cowork planner returned invalid JSON after retry repair; using safe fallback output.',
+                );
+                planner = createFallbackCoworkPlanner(req.coworkPlannerDraft);
+              }
+            }
+          }
         }
-        quality = validateCoworkPlannerQuality(planner);
+        quality = validateCoworkPlannerQuality(
+          planner,
+          req.coworkPlannerDraft?.intent,
+          req.coworkPlannerDraft,
+        );
+      }
+
+      if (quality.blocking.length > 0) {
+        warnings.push(
+          `Cowork planner did not meet quality contract after retry; using safe fallback output: ${quality.blocking.join('; ')}`,
+        );
+        planner = createFallbackCoworkPlanner(req.coworkPlannerDraft);
+        quality = validateCoworkPlannerQuality(
+          planner,
+          req.coworkPlannerDraft?.intent,
+          req.coworkPlannerDraft,
+        );
       }
 
       warnings.push(...quality.warnings);
       if (quality.blocking.length > 0) {
-        const error = new Error(
-          `Cowork planner did not meet quality contract: ${quality.blocking.join('; ')}`,
+        warnings.push(
+          `Cowork fallback did not meet quality contract but was returned to avoid blocking the user: ${quality.blocking.join('; ')}`,
         );
-        error.status = 502;
-        throw error;
       }
 
       return res.json({

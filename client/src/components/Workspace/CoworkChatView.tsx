@@ -66,7 +66,10 @@ type CoworkChatPayload = {
 };
 
 type CoworkPlannerPayload = {
+  intent: CoworkPlannerIntent;
   goal: string;
+  languageHint: CoworkLanguageHint;
+  avoidQuestions: string[];
   scope: string[];
   exclusions: string[];
   steps: never[];
@@ -88,23 +91,36 @@ type CoworkPlanRequest = {
   roomId: string;
   task: string;
   model: CoworkMessageModel;
+  intent: CoworkPlannerIntent;
+  languageHint: CoworkLanguageHint;
+  avoidQuestions: string[];
+  scope?: string[];
+  nextAction?: string;
+};
+
+type CoworkPlannerIntent = "plan" | "ask";
+type CoworkLanguageHint = "th" | "en";
+
+type CoworkCommand = {
+  kind: "chat" | CoworkPlannerIntent;
+  task: string;
 };
 
 function parseCoworkCommand(value: string) {
   const trimmedValue = value.trim();
-  const match = /^\/plan(?:\s+([\s\S]*))?$/i.exec(trimmedValue);
+  const match = /^\/(plan|ask)(?:\s+([\s\S]*))?$/i.exec(trimmedValue);
 
   if (!match) {
     return {
-      isPlanCommand: false,
+      kind: "chat",
       task: "",
-    };
+    } satisfies CoworkCommand;
   }
 
   return {
-    isPlanCommand: true,
-    task: (match[1] ?? "").trim(),
-  };
+    kind: match[1].toLowerCase() === "ask" ? "ask" : "plan",
+    task: (match[2] ?? "").trim(),
+  } satisfies CoworkCommand;
 }
 
 function getPlannerText(value: unknown) {
@@ -193,6 +209,7 @@ function normalizePlannerResult(
 ): CoworkPlannerResult {
   const decision = getPlannerDecision(planner?.decision);
   return {
+    intent: planner?.intent === "ask" ? "ask" : "plan",
     responseMode: planner?.responseMode === "decision" && decision ? "decision" : "plan",
     goal: getPlannerText(planner?.goal),
     currentUnderstanding: getPlannerText(planner?.currentUnderstanding),
@@ -217,6 +234,87 @@ function getPlannerMessageContent(plannerResult: CoworkPlannerResult, fallback: 
     return plannerResult.decision.question;
   }
   return plannerResult.currentUnderstanding || plannerResult.goal || fallback;
+}
+
+function getCoworkContinuationTopic(planner: CoworkPlannerResult, fallback: string) {
+  const topic = (planner.goal || fallback || planner.currentUnderstanding).trim();
+  if (topic.length <= 240) {
+    return topic;
+  }
+  return `${topic.slice(0, 237).trim()}...`;
+}
+
+function getCoworkLanguageHint(value: string): CoworkLanguageHint {
+  return /[\u0E00-\u0E7F]/.test(value) ? "th" : "en";
+}
+
+function getCoworkDecisionQuestions(messages: CoworkMessage[], excludeMessageId = "") {
+  return messages
+    .filter((message) => message.id !== excludeMessageId)
+    .map((message) => message.plannerResult?.decision?.question?.trim() || "")
+    .filter(Boolean)
+    .slice(-8);
+}
+
+function getCoworkPlannerMarkdown(
+  planner: CoworkPlannerResult,
+  fallback: string,
+  labels: {
+    clarifyingQuestions: string;
+    nextAction: string;
+    plan: string;
+    risks: string;
+    verification: string;
+  },
+) {
+  const sections = [
+    planner.currentUnderstanding || fallback || planner.goal,
+    planner.nextAction ? `**${labels.nextAction}**\n${planner.nextAction}` : "",
+    planner.steps.length
+      ? `**${labels.plan}**\n${planner.steps
+          .map((step, index) => `${index + 1}. ${step.title}`)
+          .join("\n")}`
+      : "",
+    planner.clarifyingQuestions.length
+      ? `**${labels.clarifyingQuestions}**\n${planner.clarifyingQuestions
+          .map((question) => `- ${question}`)
+          .join("\n")}`
+      : "",
+    planner.risks.length
+      ? `**${labels.risks}**\n${planner.risks.map((risk) => `- ${risk}`).join("\n")}`
+      : "",
+    planner.verification.length
+      ? `**${labels.verification}**\n${planner.verification
+          .map((check) => `- ${check}`)
+          .join("\n")}`
+      : "",
+  ].filter((section) => section.trim().length > 0);
+
+  return sections.join("\n\n");
+}
+
+function getCoworkContinuationInstruction(
+  intent: CoworkPlannerIntent,
+  languageHint: CoworkLanguageHint,
+) {
+  if (languageHint === "th") {
+    return intent === "ask"
+      ? "ถามคำถามถัดไปเพียง 1 ข้อที่ต่างจากเดิมและมีผลต่อ requirement มากที่สุด ถ้าข้อมูลพอแล้ว ให้ถามสั้น ๆ ว่าจะเริ่ม /plan หรือเก็บรายละเอียดต่อ"
+      : "ถ้ายังขาด decision สำคัญจริง ๆ ให้ถาม 1 ข้อที่ต่างจากเดิม ไม่อย่างนั้นให้สรุปเป็นแผนที่ทำต่อได้";
+  }
+
+  return intent === "ask"
+    ? "Ask one different highest-impact requirement question. If enough information is available, ask briefly whether to start /plan or keep gathering details."
+    : "If one important decision is still truly missing, ask one different question. Otherwise return a usable plan.";
+}
+
+function isAnsweredCoworkDecisionMessage(message: CoworkMessage) {
+  return (
+    message.role === "assistant" &&
+    message.plannerResult?.responseMode === "decision" &&
+    message.plannerResult.decision != null &&
+    message.decisionAnswer != null
+  );
 }
 
 function getRequestErrorMessage(error: unknown, fallback: string) {
@@ -434,20 +532,21 @@ function CoworkDecisionCard({
   };
 
   return (
-    <div className="mt-2 rounded-lg border border-border-light bg-surface-primary p-3 text-sm text-text-primary shadow-sm">
-      <div className="font-semibold">{decision.question}</div>
-      {decision.reason ? (
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
-          {decision.reason}
-        </p>
-      ) : null}
-      {decision.impact ? (
-        <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-text-tertiary">
-          {decision.impact}
-        </p>
+    <div className="mt-2 max-w-3xl rounded-lg border border-border-light bg-surface-primary p-3 text-sm text-text-primary shadow-sm">
+      <div className="text-[15px] font-semibold leading-6">{decision.question}</div>
+      {decision.reason || decision.impact ? (
+        <details className="mt-1 text-xs text-text-secondary">
+          <summary className="cursor-pointer list-none hover:text-text-primary [&::-webkit-details-marker]:hidden">
+            {localize("com_ui_cowork_decision_why")}
+          </summary>
+          <div className="mt-1 space-y-1 leading-5">
+            {decision.reason ? <p>{decision.reason}</p> : null}
+            {decision.impact ? <p>{decision.impact}</p> : null}
+          </div>
+        </details>
       ) : null}
 
-      <div className="mt-3 space-y-2">
+      <div className="mt-3 grid gap-2">
         {decision.options.map((option) => {
           const isRecommended = option.id === decision.recommendedOptionId;
           return (
@@ -457,15 +556,15 @@ function CoworkDecisionCard({
               onClick={() => onSubmitDecisionAnswer(message, option, "")}
               className="w-full rounded-lg border border-border-light bg-surface-secondary px-3 py-2 text-left transition-colors hover:bg-surface-hover"
             >
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold text-text-primary">{option.label}</span>
+              <div className="flex items-center gap-2">
+                <span className="truncate font-semibold text-text-primary">{option.label}</span>
                 {isRecommended ? (
-                  <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[11px] font-semibold text-blue-400">
+                  <span className="shrink-0 rounded-full bg-blue-500/15 px-2 py-0.5 text-[11px] font-semibold text-blue-400">
                     {localize("com_ui_cowork_decision_recommended")}
                   </span>
                 ) : null}
               </div>
-              <div className="mt-1 text-xs leading-5 text-text-secondary">
+              <div className="mt-1 line-clamp-2 text-xs leading-5 text-text-secondary">
                 {option.description}
               </div>
             </button>
@@ -551,100 +650,97 @@ function CoworkAssistantCard({
     );
   }
 
+  const planText = getCoworkPlannerMarkdown(
+    planner,
+    message.content,
+    {
+      clarifyingQuestions: localize("com_ui_cowork_planner_clarifying_questions"),
+      nextAction: localize("com_ui_cowork_planner_next_action"),
+      plan: localize("com_ui_cowork_plan"),
+      risks: localize("com_ui_cowork_risks"),
+      verification: localize("com_ui_cowork_verification"),
+    },
+  );
+  const hasDetails =
+    planner.scope.length > 0 ||
+    planner.exclusions.length > 0 ||
+    planner.inspectFiles.length > 0 ||
+    planner.suggestedFiles.length > 0 ||
+    planner.avoidFiles.length > 0 ||
+    planner.warnings.length > 0 ||
+    Boolean(planner.codexPrompt);
+
   return (
-    <div className="mt-2 rounded-lg border border-border-light bg-surface-primary p-3 text-sm text-text-primary shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="font-semibold">
-          {localize("com_ui_cowork_planner_preview")}
-        </div>
-        {message.model?.endpoint ? (
-          <div className="rounded-full bg-surface-secondary px-2 py-1 text-xs text-text-secondary">
-            {message.model.model || message.model.spec || message.model.endpoint}
-          </div>
-        ) : null}
-      </div>
+    <div className="mt-2 space-y-3 text-sm text-text-primary">
+      <StreamingCoworkText
+        animate={animateText}
+        className="text-sm leading-7 text-text-primary [&_h1]:mb-2 [&_h1]:mt-4 [&_h2]:mb-2 [&_h2]:mt-4 [&_h3]:mb-2 [&_h3]:mt-4 [&_li]:my-0.5 [&_ol]:my-2 [&_p:last-child]:mb-0 [&_p]:mb-2 [&_ul]:my-2"
+        text={planText}
+      />
 
-      <div className="mt-3 space-y-3">
-        <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
-          <div className="text-xs font-semibold text-text-primary">
-            {localize("com_ui_cowork_planner_current_understanding")}
-          </div>
-          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
-            {planner?.currentUnderstanding || message.content || planner?.goal || "-"}
-          </p>
-        </div>
-
-        {planner?.nextAction ? (
-          <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
-            <div className="text-xs font-semibold text-text-primary">
-              {localize("com_ui_cowork_planner_next_action")}
-            </div>
-            <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
-              {planner.nextAction}
-            </p>
-          </div>
-        ) : null}
-
-        <PlannerList
-          title={localize("com_ui_cowork_planner_clarifying_questions")}
-          items={planner?.clarifyingQuestions ?? []}
-        />
-
-        {planner?.steps.length ? (
-          <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
-            <div className="text-xs font-semibold text-text-primary">
-              {localize("com_ui_cowork_plan")}
-            </div>
-            <ol className="mt-1 list-decimal space-y-1 pl-4 text-xs leading-5 text-text-secondary">
-              {planner.steps.map((step, index) => (
-                <li key={`${message.id}-step-${index}`}>{step.title}</li>
-              ))}
-            </ol>
-          </div>
-        ) : null}
-
-        <PlannerList
-          title={localize("com_ui_cowork_risks")}
-          items={planner?.risks ?? []}
-        />
-        <PlannerList
-          title={localize("com_ui_cowork_verification")}
-          items={planner?.verification ?? []}
-        />
-        <PlannerList
-          title={localize("com_ui_cowork_planner_warnings")}
-          items={planner?.warnings ?? []}
-        />
-
-        {planner?.codexPrompt ? (
-          <details className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
-            <summary className="cursor-pointer list-none text-xs font-semibold text-text-primary [&::-webkit-details-marker]:hidden">
-              {localize("com_ui_cowork_planner_codex_prompt")}
-            </summary>
-            <textarea
-              readOnly
-              rows={6}
-              value={planner.codexPrompt}
-              aria-label={localize("com_ui_cowork_planner_codex_prompt")}
-              className="mt-2 w-full resize-none rounded-md border border-border-light bg-surface-primary px-3 py-2 font-mono text-xs leading-5 text-text-primary outline-none"
+      {hasDetails ? (
+        <details className="rounded-lg border border-border-light bg-surface-primary px-3 py-2 shadow-sm">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-xs font-semibold text-text-secondary hover:text-text-primary [&::-webkit-details-marker]:hidden">
+            <span>{localize("com_ui_cowork_planner_details")}</span>
+            {message.model?.endpoint ? (
+              <span className="rounded-full bg-surface-secondary px-2 py-1 font-normal">
+                {message.model.model || message.model.spec || message.model.endpoint}
+              </span>
+            ) : null}
+          </summary>
+          <div className="mt-3 space-y-3">
+            <PlannerList
+              title={localize("com_ui_cowork_planner_in_scope")}
+              items={planner.scope}
             />
-            <button
-              type="button"
-              onClick={() => onCopyCodexPrompt(message)}
-              className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-border-light bg-surface-primary px-3 text-xs font-semibold text-text-primary hover:bg-surface-hover"
-            >
-              {copied ? (
-                <Check className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : (
-                <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-              {copied
-                ? localize("com_ui_cowork_copied")
-                : localize("com_ui_cowork_planner_copy_codex_prompt")}
-            </button>
-          </details>
-        ) : null}
-      </div>
+            <PlannerList
+              title={localize("com_ui_cowork_planner_out_of_scope")}
+              items={planner.exclusions}
+            />
+            <PlannerList
+              title={localize("com_ui_cowork_planner_likely_files")}
+              items={planner.inspectFiles}
+            />
+            <PlannerList
+              title={localize("com_ui_cowork_planner_suggested_files")}
+              items={planner.suggestedFiles}
+            />
+            <PlannerList
+              title={localize("com_ui_cowork_planner_warnings")}
+              items={planner.warnings}
+            />
+
+            {planner.codexPrompt ? (
+              <div className="rounded-md border border-border-light bg-surface-secondary px-3 py-2">
+                <div className="text-xs font-semibold text-text-primary">
+                  {localize("com_ui_cowork_planner_codex_prompt")}
+                </div>
+                <textarea
+                  readOnly
+                  rows={6}
+                  value={planner.codexPrompt}
+                  aria-label={localize("com_ui_cowork_planner_codex_prompt")}
+                  className="mt-2 w-full resize-none rounded-md border border-border-light bg-surface-primary px-3 py-2 font-mono text-xs leading-5 text-text-primary outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => onCopyCodexPrompt(message)}
+                  className="mt-2 inline-flex h-8 items-center gap-2 rounded-md border border-border-light bg-surface-primary px-3 text-xs font-semibold text-text-primary hover:bg-surface-hover"
+                >
+                  {copied ? (
+                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {copied
+                    ? localize("com_ui_cowork_copied")
+                    : localize("com_ui_cowork_planner_copy_codex_prompt")}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }
@@ -762,12 +858,16 @@ function CoworkMessagesView({
   ) => void;
   roomId: string;
 }) {
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !isAnsweredCoworkDecisionMessage(message)),
+    [messages],
+  );
   const previousRoomIdRef = useRef(roomId);
-  const previousMessageIdsRef = useRef(new Set(messages.map((message) => message.id)));
+  const previousMessageIdsRef = useRef(new Set(visibleMessages.map((message) => message.id)));
   const [animatedMessageIds, setAnimatedMessageIds] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
-    const currentMessageIds = new Set(messages.map((message) => message.id));
+    const currentMessageIds = new Set(visibleMessages.map((message) => message.id));
     if (previousRoomIdRef.current !== roomId) {
       previousRoomIdRef.current = roomId;
       previousMessageIdsRef.current = currentMessageIds;
@@ -775,12 +875,12 @@ function CoworkMessagesView({
       return;
     }
 
-    const nextAnimatedIds = messages
+    const nextAnimatedIds = visibleMessages
       .filter(
         (message) =>
           message.role === "assistant" &&
           !message.error &&
-          !message.plannerResult &&
+          (!message.plannerResult || message.plannerResult.responseMode === "plan") &&
           !previousMessageIdsRef.current.has(message.id),
       )
       .map((message) => message.id);
@@ -795,7 +895,7 @@ function CoworkMessagesView({
       nextAnimatedIds.forEach((messageId) => nextIds.add(messageId));
       return nextIds;
     });
-  }, [messages, roomId]);
+  }, [visibleMessages, roomId]);
 
   return (
     <div className="relative flex-1 overflow-hidden overflow-y-auto">
@@ -809,7 +909,7 @@ function CoworkMessagesView({
           }}
         >
           <div className="flex flex-col pb-9 pt-14 dark:bg-transparent">
-            {messages.map((message) => (
+            {visibleMessages.map((message) => (
               <CoworkMessageRow
                 animateAssistant={animatedMessageIds.has(message.id)}
                 key={message.id}
@@ -1054,6 +1154,7 @@ export default function CoworkChatView() {
     activeRoom,
     addAssistantMessage,
     addMessage,
+    answerDecisionMessage,
     createProject,
     createRoom,
     isProjectsViewOpen,
@@ -1065,7 +1166,7 @@ export default function CoworkChatView() {
   const [draft, setDraft] = useState("");
   const [isTextAreaFocused, setIsTextAreaFocused] = useState(false);
   const [pendingRoomId, setPendingRoomId] = useState("");
-  const [pendingKind, setPendingKind] = useState<"chat" | "plan" | "">("");
+  const [pendingKind, setPendingKind] = useState<"chat" | CoworkPlannerIntent | "">("");
   const [copiedMessageId, setCopiedMessageId] = useState("");
   const textAreaRef = useRef<HTMLTextAreaElement | null>(null);
   const localize = useLocalize();
@@ -1117,7 +1218,16 @@ export default function CoworkChatView() {
     window.setTimeout(() => setCopiedMessageId(""), 1600);
   };
 
-  const requestCoworkPlan = async ({ roomId, task, model }: CoworkPlanRequest) => {
+  const requestCoworkPlan = async ({
+    roomId,
+    task,
+    model,
+    intent,
+    languageHint,
+    avoidQuestions,
+    scope = [],
+    nextAction = "",
+  }: CoworkPlanRequest) => {
     if (!model.endpoint) {
       addAssistantMessage(roomId, {
         content: "",
@@ -1128,11 +1238,14 @@ export default function CoworkChatView() {
     }
 
     setPendingRoomId(roomId);
-    setPendingKind("plan");
+    setPendingKind(intent);
     try {
       const payload: CoworkPlannerPayload = {
+        intent,
         goal: task,
-        scope: [],
+        languageHint,
+        avoidQuestions,
+        scope,
         exclusions: [],
         steps: [],
         inspectFiles: [],
@@ -1140,7 +1253,7 @@ export default function CoworkChatView() {
         avoidFiles: [],
         risks: [],
         verification: [],
-        nextAction: "",
+        nextAction,
         endpoint: model.endpoint,
         endpointType: model.endpointType,
         model: model.model,
@@ -1203,18 +1316,42 @@ export default function CoworkChatView() {
     const userMessage = option
       ? `${localize("com_ui_cowork_decision_selected")}: ${option.label}`
       : answer;
-    const nextTask = [
-      `Original goal:\n${planner.goal || planner.currentUnderstanding || message.content}`,
-      `Decision question:\n${decision.question}`,
-      `User answer:\n${answer}`,
-      'Continue the /plan flow. If another implementation-blocking decision is still missing, ask the next single decision. If enough information is available, return a scoped plan.',
-    ].join("\n\n");
+    const intent = planner.intent === "ask" ? "ask" : "plan";
+    const languageHint = getCoworkLanguageHint(
+      [
+        ...activeRoom.messages.map((roomMessage) => roomMessage.content),
+        planner.goal,
+        planner.currentUnderstanding,
+        decision.question,
+        answer,
+      ].join(" "),
+    );
+    const avoidQuestions = [
+      ...getCoworkDecisionQuestions(activeRoom.messages, message.id),
+      decision.question,
+    ];
+    const nextTask = getCoworkContinuationTopic(planner, message.content);
+    const scope =
+      languageHint === "th"
+        ? [`คำถามที่ตอบแล้ว: ${decision.question}`, `คำตอบผู้ใช้: ${answer}`]
+        : [`Answered question: ${decision.question}`, `User answer: ${answer}`];
 
+    answerDecisionMessage(activeRoom.id, message.id, {
+      question: decision.question,
+      answer,
+      optionId: option?.id,
+      optionLabel: option?.label,
+    });
     addMessage(activeRoom.id, userMessage);
     void requestCoworkPlan({
       roomId: activeRoom.id,
       task: nextTask,
       model: selectedModel,
+      intent,
+      languageHint,
+      avoidQuestions,
+      scope,
+      nextAction: getCoworkContinuationInstruction(intent, languageHint),
     });
   };
 
@@ -1235,7 +1372,7 @@ export default function CoworkChatView() {
     });
 
     const command = parseCoworkCommand(prompt);
-    if (!command.isPlanCommand) {
+    if (command.kind === "chat") {
       const model = selectedModel;
       if (!model.endpoint) {
         addAssistantMessage(roomId, {
@@ -1290,7 +1427,11 @@ export default function CoworkChatView() {
     if (!command.task) {
       addAssistantMessage(roomId, {
         content: "",
-        error: localize("com_ui_cowork_plan_command_empty"),
+        error: localize(
+          command.kind === "ask"
+            ? "com_ui_cowork_ask_command_empty"
+            : "com_ui_cowork_plan_command_empty",
+        ),
       });
       return;
     }
@@ -1303,7 +1444,14 @@ export default function CoworkChatView() {
       return;
     }
 
-    await requestCoworkPlan({ roomId, task: command.task, model: selectedModel });
+    await requestCoworkPlan({
+      roomId,
+      task: command.task,
+      model: selectedModel,
+      intent: command.kind,
+      languageHint: getCoworkLanguageHint(command.task || prompt),
+      avoidQuestions: getCoworkDecisionQuestions(activeRoom.messages),
+    });
   };
 
   if (isProjectsViewOpen) {
@@ -1371,7 +1519,9 @@ export default function CoworkChatView() {
             {pendingRoomId && pendingRoomId === activeRoom?.id ? (
               <div className="mx-auto -mt-8 mb-8 max-w-3xl px-4 text-xs text-text-secondary xl:max-w-4xl">
                 {localize(
-                  pendingKind === "plan"
+                  pendingKind === "ask"
+                    ? "com_ui_cowork_ask_loading"
+                    : pendingKind === "plan"
                     ? "com_ui_cowork_planner_loading"
                     : "com_ui_cowork_chat_loading",
                 )}

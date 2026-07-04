@@ -5,6 +5,7 @@ export type CoworkMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: string;
+  decisionAnswer?: CoworkDecisionAnswer | null;
   plannerResult?: CoworkPlannerResult | null;
   model?: CoworkMessageModel | null;
   error?: string | null;
@@ -30,7 +31,16 @@ export type CoworkDecision = {
   allowCustomAnswer: boolean;
 };
 
+export type CoworkDecisionAnswer = {
+  question: string;
+  answer: string;
+  optionId: string;
+  optionLabel: string;
+  createdAt: string;
+};
+
 export type CoworkPlannerResult = {
+  intent: "plan" | "ask";
   responseMode: "plan" | "decision";
   goal: string;
   currentUnderstanding: string;
@@ -63,6 +73,13 @@ export type CoworkAssistantMessageInput = {
   plannerResult?: CoworkPlannerResult | null;
   model?: CoworkMessageModel | null;
   error?: string | null;
+};
+
+export type CoworkDecisionAnswerInput = {
+  question: string;
+  answer: string;
+  optionId?: string;
+  optionLabel?: string;
 };
 
 export type CoworkProject = {
@@ -164,6 +181,21 @@ function getStringArray(value: unknown) {
         .map((item) => getString(item))
         .filter((item) => item.length > 0)
     : [];
+}
+
+function hasCoworkMojibake(value = "") {
+  return /[\u0080-\u009F]|เน(?:\u20AC|\u0081|\u0084|\u0088|\u0089)|เธ[กขคงจฉชซดตถทธนบปผฝพฟภมยรลวศษสหอฮ]/.test(
+    value,
+  );
+}
+
+function getReadablePlannerText(value: string, fallback: string) {
+  return hasCoworkMojibake(value) ? fallback : value;
+}
+
+function getReadablePlannerList(value: unknown, fallback: string[] = []) {
+  const items = getStringArray(value).filter((item) => !hasCoworkMojibake(item));
+  return items.length > 0 ? items : fallback;
 }
 
 function normalizeLegacyDraft(value: unknown): LegacyCoworkDraft | null {
@@ -281,24 +313,80 @@ function normalizePlannerResult(value: unknown): CoworkPlannerResult | null {
     return null;
   }
 
-  const decision = normalizeDecision(value.decision);
+  const goal = getReadablePlannerText(getString(value.goal), "งาน Cowork");
+  const currentUnderstanding = getString(value.currentUnderstanding);
+  const nextAction = getString(value.nextAction);
+  const normalizedSteps = normalizePlannerSteps(value.steps).filter(
+    (step) => !hasCoworkMojibake(step.title),
+  );
+  const rawDecision = normalizeDecision(value.decision);
+  const decision =
+    rawDecision &&
+    !hasCoworkMojibake(
+      [
+        rawDecision.question,
+        rawDecision.reason,
+        rawDecision.impact,
+        ...rawDecision.options.flatMap((option) => [option.label, option.description]),
+      ].join(" "),
+    )
+      ? rawDecision
+      : null;
+  const hasUnreadablePlannerText =
+    hasCoworkMojibake(currentUnderstanding) ||
+    hasCoworkMojibake(nextAction) ||
+    getStringArray(value.clarifyingQuestions).some(hasCoworkMojibake) ||
+    getStringArray(value.scope).some(hasCoworkMojibake);
+
   return {
+    intent: value.intent === "ask" ? "ask" : "plan",
     responseMode: value.responseMode === "decision" && decision ? "decision" : "plan",
-    goal: getString(value.goal),
-    currentUnderstanding: getString(value.currentUnderstanding),
-    clarifyingQuestions: getStringArray(value.clarifyingQuestions),
-    scope: getStringArray(value.scope),
-    exclusions: getStringArray(value.exclusions),
-    steps: normalizePlannerSteps(value.steps),
-    inspectFiles: getStringArray(value.inspectFiles),
-    suggestedFiles: getStringArray(value.suggestedFiles),
-    avoidFiles: getStringArray(value.avoidFiles),
-    risks: getStringArray(value.risks),
-    verification: getStringArray(value.verification),
-    nextAction: getString(value.nextAction),
-    codexPrompt: getString(value.codexPrompt),
-    warnings: getStringArray(value.warnings),
+    goal,
+    currentUnderstanding: getReadablePlannerText(
+      currentUnderstanding,
+      `ผลลัพธ์แผนเดิมอ่านไม่ได้เพราะ encoding เสีย ให้ส่ง /plan ใหม่สำหรับ ${goal} เพื่อสร้างแผนที่อ่านได้.`,
+    ),
+    clarifyingQuestions: getReadablePlannerList(
+      value.clarifyingQuestions,
+      hasUnreadablePlannerText ? ["ส่ง /plan ใหม่อีกครั้งเพื่อสร้างแผนที่อ่านได้"] : [],
+    ),
+    scope: getReadablePlannerList(value.scope),
+    exclusions: getReadablePlannerList(value.exclusions),
+    steps: normalizedSteps,
+    inspectFiles: getReadablePlannerList(value.inspectFiles),
+    suggestedFiles: getReadablePlannerList(value.suggestedFiles),
+    avoidFiles: getReadablePlannerList(value.avoidFiles),
+    risks: getReadablePlannerList(value.risks),
+    verification: getReadablePlannerList(value.verification),
+    nextAction: getReadablePlannerText(
+      nextAction,
+      "ส่ง /plan ใหม่อีกครั้งเพื่อสร้างแผนที่อ่านได้.",
+    ),
+    codexPrompt: getReadablePlannerText(getString(value.codexPrompt), ""),
+    warnings: getReadablePlannerList(value.warnings),
     decision,
+  };
+}
+
+function normalizeDecisionAnswer(value: unknown): CoworkDecisionAnswer | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+
+  const question = getString(value.question);
+  const answer = getString(value.answer);
+  const createdAt = getString(value.createdAt);
+
+  if (!question || !answer || !createdAt) {
+    return null;
+  }
+
+  return {
+    question,
+    answer,
+    optionId: getString(value.optionId),
+    optionLabel: getString(value.optionLabel),
+    createdAt,
   };
 }
 
@@ -340,6 +428,7 @@ function normalizeMessage(message: unknown): CoworkMessage | null {
   };
 
   if (candidate.role === "assistant") {
+    normalizedMessage.decisionAnswer = normalizeDecisionAnswer(candidate.decisionAnswer);
     normalizedMessage.plannerResult = normalizePlannerResult(candidate.plannerResult);
     normalizedMessage.model = normalizeMessageModel(candidate.model);
     normalizedMessage.error = getString(candidate.error) || null;
@@ -823,6 +912,64 @@ export function useCoworkRooms() {
     });
   };
 
+  const answerDecisionMessage = (
+    roomId: string,
+    messageId: string,
+    answer: CoworkDecisionAnswerInput,
+  ) => {
+    const now = new Date().toISOString();
+    const trimmedAnswer = answer.answer.trim();
+    const trimmedQuestion = answer.question.trim();
+
+    if (!trimmedAnswer || !trimmedQuestion) {
+      return;
+    }
+
+    commitCoworkState((currentState) => {
+      let didUpdate = false;
+      const nextRooms = currentState.rooms.map((room) => {
+        if (room.id !== roomId || room.archivedAt) {
+          return room;
+        }
+
+        const nextMessages = room.messages.map((message) => {
+          if (message.id !== messageId || message.role !== "assistant") {
+            return message;
+          }
+
+          didUpdate = true;
+          return {
+            ...message,
+            decisionAnswer: {
+              question: trimmedQuestion,
+              answer: trimmedAnswer,
+              optionId: answer.optionId?.trim() ?? "",
+              optionLabel: answer.optionLabel?.trim() ?? "",
+              createdAt: now,
+            },
+          };
+        });
+
+        return didUpdate
+          ? {
+              ...room,
+              updatedAt: now,
+              messages: nextMessages,
+            }
+          : room;
+      });
+
+      if (!didUpdate) {
+        return currentState;
+      }
+
+      return {
+        ...currentState,
+        rooms: nextRooms,
+      };
+    });
+  };
+
   const renameRoom = (roomId: string, title: string) => {
     const trimmedTitle = title.trim();
     if (!trimmedTitle) {
@@ -988,6 +1135,7 @@ export function useCoworkRooms() {
     projects,
     activeRoom,
     activeRoomId,
+    answerDecisionMessage,
     addAssistantMessage,
     expandedProjectIds,
     isProjectsViewOpen,
