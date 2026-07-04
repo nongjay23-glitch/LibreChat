@@ -256,6 +256,32 @@ function getCoworkDecisionQuestions(messages: CoworkMessage[], excludeMessageId 
     .slice(-8);
 }
 
+function getCoworkAnsweredRequirements(
+  messages: CoworkMessage[],
+  languageHint: CoworkLanguageHint,
+) {
+  return messages
+    .filter(
+      (message) =>
+        message.role === "assistant" &&
+        message.plannerResult?.decision != null &&
+        message.decisionAnswer != null,
+    )
+    .slice(-8)
+    .flatMap((message) => {
+      const decisionAnswer = message.decisionAnswer!;
+      return languageHint === "th"
+        ? [
+            `คำถามที่ตอบแล้ว: ${decisionAnswer.question}`,
+            `คำตอบผู้ใช้: ${decisionAnswer.answer}`,
+          ]
+        : [
+            `Answered question: ${decisionAnswer.question}`,
+            `User answer: ${decisionAnswer.answer}`,
+          ];
+    });
+}
+
 function getCoworkPlannerMarkdown(
   planner: CoworkPlannerResult,
   fallback: string,
@@ -388,12 +414,14 @@ function CoworkMessageRow({
   copiedMessageId,
   message,
   onCopyCodexPrompt,
+  onStartPlanNow,
   onSubmitDecisionAnswer,
 }: {
   animateAssistant: boolean;
   copiedMessageId: string;
   message: CoworkMessage;
   onCopyCodexPrompt: (message: CoworkMessage) => void;
+  onStartPlanNow: (message: CoworkMessage) => void;
   onSubmitDecisionAnswer: (
     message: CoworkMessage,
     option: CoworkDecisionOption | null,
@@ -436,6 +464,7 @@ function CoworkMessageRow({
                 copied={copiedMessageId === message.id}
                 message={message}
                 onCopyCodexPrompt={onCopyCodexPrompt}
+                onStartPlanNow={onStartPlanNow}
                 onSubmitDecisionAnswer={onSubmitDecisionAnswer}
               />
             </div>
@@ -505,9 +534,11 @@ function PlannerList({ items, title }: { items: string[]; title: string }) {
 
 function CoworkDecisionCard({
   message,
+  onStartPlanNow,
   onSubmitDecisionAnswer,
 }: {
   message: CoworkMessage;
+  onStartPlanNow: (message: CoworkMessage) => void;
   onSubmitDecisionAnswer: (
     message: CoworkMessage,
     option: CoworkDecisionOption | null,
@@ -521,6 +552,8 @@ function CoworkDecisionCard({
   if (!decision) {
     return null;
   }
+
+  const isAskFlow = message.plannerResult?.intent === "ask";
 
   const submitCustomAnswer = () => {
     const answer = customAnswer.trim();
@@ -593,6 +626,21 @@ function CoworkDecisionCard({
           </div>
         </div>
       ) : null}
+
+      {isAskFlow ? (
+        <div className="mt-3 flex items-center justify-between gap-2 border-t border-border-light pt-3">
+          <span className="text-xs text-text-secondary">
+            {localize("com_ui_cowork_decision_start_plan_hint")}
+          </span>
+          <button
+            type="button"
+            onClick={() => onStartPlanNow(message)}
+            className="inline-flex h-8 shrink-0 items-center rounded-md border border-border-light bg-surface-primary px-3 text-xs font-semibold text-text-primary hover:bg-surface-hover"
+          >
+            {localize("com_ui_cowork_decision_start_plan")}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -602,12 +650,14 @@ function CoworkAssistantCard({
   copied,
   message,
   onCopyCodexPrompt,
+  onStartPlanNow,
   onSubmitDecisionAnswer,
 }: {
   animateText: boolean;
   copied: boolean;
   message: CoworkMessage;
   onCopyCodexPrompt: (message: CoworkMessage) => void;
+  onStartPlanNow: (message: CoworkMessage) => void;
   onSubmitDecisionAnswer: (
     message: CoworkMessage,
     option: CoworkDecisionOption | null,
@@ -645,6 +695,7 @@ function CoworkAssistantCard({
     return (
       <CoworkDecisionCard
         message={message}
+        onStartPlanNow={onStartPlanNow}
         onSubmitDecisionAnswer={onSubmitDecisionAnswer}
       />
     );
@@ -845,12 +896,14 @@ function CoworkMessagesView({
   copiedMessageId,
   messages,
   onCopyCodexPrompt,
+  onStartPlanNow,
   onSubmitDecisionAnswer,
   roomId,
 }: {
   copiedMessageId: string;
   messages: CoworkMessage[];
   onCopyCodexPrompt: (message: CoworkMessage) => void;
+  onStartPlanNow: (message: CoworkMessage) => void;
   onSubmitDecisionAnswer: (
     message: CoworkMessage,
     option: CoworkDecisionOption | null,
@@ -916,6 +969,7 @@ function CoworkMessagesView({
                 copiedMessageId={copiedMessageId}
                 message={message}
                 onCopyCodexPrompt={onCopyCodexPrompt}
+                onStartPlanNow={onStartPlanNow}
                 onSubmitDecisionAnswer={onSubmitDecisionAnswer}
               />
             ))}
@@ -1331,10 +1385,12 @@ export default function CoworkChatView() {
       decision.question,
     ];
     const nextTask = getCoworkContinuationTopic(planner, message.content);
-    const scope =
-      languageHint === "th"
+    const scope = [
+      ...getCoworkAnsweredRequirements(activeRoom.messages, languageHint),
+      ...(languageHint === "th"
         ? [`คำถามที่ตอบแล้ว: ${decision.question}`, `คำตอบผู้ใช้: ${answer}`]
-        : [`Answered question: ${decision.question}`, `User answer: ${answer}`];
+        : [`Answered question: ${decision.question}`, `User answer: ${answer}`]),
+    ].slice(-16);
 
     answerDecisionMessage(activeRoom.id, message.id, {
       question: decision.question,
@@ -1352,6 +1408,39 @@ export default function CoworkChatView() {
       avoidQuestions,
       scope,
       nextAction: getCoworkContinuationInstruction(intent, languageHint),
+    });
+  };
+
+  const handleStartPlanNow = (message: CoworkMessage) => {
+    if (!activeRoom || pendingRoomId) {
+      return;
+    }
+
+    const planner = message.plannerResult;
+    if (!planner) {
+      return;
+    }
+
+    const languageHint = getCoworkLanguageHint(
+      [
+        ...activeRoom.messages.map((roomMessage) => roomMessage.content),
+        planner.goal,
+        planner.currentUnderstanding,
+      ].join(" "),
+    );
+    const nextTask = getCoworkContinuationTopic(planner, message.content);
+    const scope = getCoworkAnsweredRequirements(activeRoom.messages, languageHint);
+
+    addMessage(activeRoom.id, localize("com_ui_cowork_decision_start_plan"));
+    void requestCoworkPlan({
+      roomId: activeRoom.id,
+      task: nextTask,
+      model: selectedModel,
+      intent: "plan",
+      languageHint,
+      avoidQuestions: getCoworkDecisionQuestions(activeRoom.messages),
+      scope,
+      nextAction: getCoworkContinuationInstruction("plan", languageHint),
     });
   };
 
@@ -1444,13 +1533,15 @@ export default function CoworkChatView() {
       return;
     }
 
+    const languageHint = getCoworkLanguageHint(command.task || prompt);
     await requestCoworkPlan({
       roomId,
       task: command.task,
       model: selectedModel,
       intent: command.kind,
-      languageHint: getCoworkLanguageHint(command.task || prompt),
+      languageHint,
       avoidQuestions: getCoworkDecisionQuestions(activeRoom.messages),
+      scope: getCoworkAnsweredRequirements(activeRoom.messages, languageHint),
     });
   };
 
@@ -1493,6 +1584,7 @@ export default function CoworkChatView() {
               copiedMessageId={copiedMessageId}
               messages={activeRoom.messages}
               onCopyCodexPrompt={handleCopyCodexPrompt}
+              onStartPlanNow={handleStartPlanNow}
               onSubmitDecisionAnswer={handleSubmitDecisionAnswer}
               roomId={activeRoom.id}
             />
