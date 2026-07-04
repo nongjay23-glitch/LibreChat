@@ -38,6 +38,8 @@ Sensitive provider/API config lives in local config and must not be printed or c
   - Current Cowork planning workspace with Goal, Scope, Plan, Files, Risks, Verification, Next Action, prompt handoff, file-context guidance, local draft persistence, and local Cowork History. Target direction: Chat-first Cowork where these structures become internal/advanced support behind a task-focused AI cowork chat.
 - `COWORK_ROADMAP.md`
   - Dedicated Cowork product roadmap. Source of truth for the Chat-first Cowork direction, sandbox boundary, hidden multi-step reasoning plan, and future Cowork-to-Code apply path.
+- `SYSTEM_FILE_MAP.md`
+  - Source of truth for system/file ownership map, entrypoints, and safety boundaries.
 - `client/src/components/Workspace/WorkspaceModeTabs.tsx`
   - Chat/Cowork/Code mode tabs. Sources/Notebook is no longer a main workspace tab.
 - `client/src/components/Workspace/SourcesPanel.tsx`

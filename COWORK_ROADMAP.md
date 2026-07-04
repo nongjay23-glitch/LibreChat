@@ -4,6 +4,8 @@
 
 Cowork should become a separate chat mode for work/action tasks, not just a chat-like panel inside the normal Chat layout.
 
+For system/file ownership and safety boundaries, use `SYSTEM_FILE_MAP.md`. This roadmap tracks Cowork direction and phases; it is not the source of truth for repo file ownership.
+
 Main idea:
 
 - User enters a Cowork room/project.
