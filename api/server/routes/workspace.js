@@ -33,10 +33,12 @@ const MAX_ACTIVITY_ITEMS = 50;
 const MAX_COWORK_CHAT_PROMPT_BYTES = 32 * 1024;
 const MAX_COWORK_CHAT_CONTEXT_MESSAGES = 12;
 const MAX_COWORK_PLANNER_PROMPT_BYTES = 32 * 1024;
+const MAX_COWORK_PLANNER_RETRY_TEXT_LENGTH = 12000;
 const MAX_COWORK_STRING_LENGTH = 1200;
 const MAX_COWORK_CODEX_PROMPT_LENGTH = 6000;
 const MAX_COWORK_LIST_ITEMS = 24;
 const MAX_COWORK_STEPS = 12;
+const MAX_COWORK_DECISION_OPTIONS = 4;
 const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE_READONLY_ROOT || '/readonly-workspace');
 const WORKSPACE_WRITE_ROOT = process.env.WORKSPACE_WRITE_ROOT
   ? path.resolve(process.env.WORKSPACE_WRITE_ROOT)
@@ -72,6 +74,12 @@ const COWORK_DEFAULT_AVOID_FILES = [
  */
 const COWORK_SECRET_VALUE_PATTERN =
   /-----BEGIN|\b(api[-_ ]?key|password|token|secret|credential)\s*[:=]\s*\S{6,}|\bBearer\s+[A-Za-z0-9_.\-]{20,}|\b(?:sk|pk|rk|xox[baprs]?)-[A-Za-z0-9_\-]{12,}\b/i;
+const COWORK_GENERIC_PLAN_PATTERN =
+  /\b(improve|optimize|handle|implement feature|review code|test thoroughly|fix bugs|make it better|do the task|check everything|update things)\b/i;
+const COWORK_SPECIFIC_ANCHOR_PATTERN =
+  /\/|\.[a-z0-9]{1,8}\b|localStorage|endpoint|route|payload|schema|state|history|conversation|message|room|project|model|planner|sidebar|composer|backend|frontend|api|UI|Chat|Cowork|Code|Notebook|Sources|sandbox|diff|verify|test|expected|avoid|scope|risk/i;
+const COWORK_PLANNER_RESPONSE_SCHEMA =
+  '{"responseMode":"plan|decision","goal":"string","currentUnderstanding":"string","clarifyingQuestions":["string"],"scope":["string"],"exclusions":["string"],"steps":[{"title":"string","status":"todo"}],"inspectFiles":["string"],"suggestedFiles":["string"],"avoidFiles":["string"],"risks":["string"],"verification":["string"],"nextAction":"string","codexPrompt":"string","decision":{"question":"string","reason":"string","impact":"string","recommendedOptionId":"string","options":[{"id":"string","label":"string","description":"string"}],"allowCustomAnswer":true}}';
 
 const BLOCKED_SEGMENTS = new Set([
   '.cache',
@@ -267,6 +275,45 @@ function sanitizeCoworkSteps(value, outputOnly = false) {
     .slice(0, MAX_COWORK_STEPS);
 }
 
+function sanitizeCoworkDecision(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const options = Array.isArray(value.options)
+    ? value.options
+        .map((option, index) => {
+          const id = sanitizeCoworkText(option?.id, 80) || `option-${index + 1}`;
+          const label = sanitizeCoworkText(option?.label, 160);
+          const description = sanitizeCoworkText(option?.description, 500);
+          if (!label || !description) {
+            return null;
+          }
+          return { id, label, description };
+        })
+        .filter(Boolean)
+        .slice(0, MAX_COWORK_DECISION_OPTIONS)
+    : [];
+
+  const optionIds = new Set(options.map((option) => option.id));
+  const recommendedOptionId = sanitizeCoworkText(value.recommendedOptionId, 80);
+
+  const decision = {
+    question: sanitizeCoworkText(value.question),
+    reason: sanitizeCoworkText(value.reason),
+    impact: sanitizeCoworkText(value.impact),
+    recommendedOptionId: optionIds.has(recommendedOptionId) ? recommendedOptionId : '',
+    options,
+    allowCustomAnswer: value.allowCustomAnswer !== false,
+  };
+
+  if (!decision.question || options.length === 0) {
+    return null;
+  }
+
+  return decision;
+}
+
 function sanitizeCoworkDraft(value = {}) {
   return {
     goal: sanitizeCoworkText(value.goal),
@@ -313,10 +360,29 @@ function createCoworkPlannerPrompt(draft) {
     'You ask clarifying questions when needed.',
     'You prepare a Codex/Code handoff prompt.',
     'Code mode remains the only place for project-file context, patch review, apply, checkpoint, restore, and verification.',
+    'Normal Cowork chat is for ordinary conversation. This planner is only for explicit /plan requests and must produce a high-quality implementation handoff.',
     'Return strict JSON only matching the requested schema.',
     'Do not include secrets, provider config, API keys, or full source content.',
-    'Do not include terminal commands as direct actions to run.',
+    'Do not say Cowork ran terminal commands. Verification and codexPrompt may propose checks for Code mode or the user to run, but must clearly be proposed checks, not actions already performed.',
     'Treat these paths as unsafe and never recommend editing them: .env, token, password, credential, .git, node_modules, logs, uploads, database files, binary files, provider config files containing secrets.',
+    '',
+    'Quality contract:',
+    '- Use the same language as the user input when practical.',
+    '- Do not invent repository facts, file names, APIs, routes, or implementation details that are not present in the draft. If details are missing, say they are unknown.',
+    '- responseMode must be "plan" when enough information exists to make a useful scoped plan.',
+    '- responseMode may be "decision" only when one missing decision would materially change the plan and unsafe guessing would likely send implementation in the wrong direction.',
+    '- Do not ask a decision question just because the schema supports it. If a safe default exists, state the assumption and return a plan.',
+    '- For responseMode "decision", ask exactly one highest-impact question. Provide 2-4 concrete options plus allowCustomAnswer true. Every option must change scope, architecture, risk, or next implementation step.',
+    '- currentUnderstanding must summarize the concrete goal, known constraints, current phase, and important unknowns. It must not be a vague restatement.',
+    '- clarifyingQuestions must contain only questions that unblock implementation decisions. Prefer 0-5 questions. Do not ask generic questions when the next step is already clear.',
+    '- scope must describe concrete included work for this phase. Each item should be specific enough to review.',
+    '- exclusions must explicitly protect out-of-scope systems, normal Chat history, file edits, tools, terminal actions, sandbox, Notebook/Sources, and Code mode when applicable.',
+    '- steps must be 3-8 small, ordered, reviewable implementation steps. Each step must include a clear target and avoid vague verbs like "improve", "handle", or "optimize" unless the object and expected behavior are concrete.',
+    '- risks must describe real failure modes tied to this task, not generic project risk. Include how each risk could show up.',
+    '- verification must list concrete checks or manual tests that prove the phase works and did not touch protected systems.',
+    '- nextAction must be one immediate action. If critical inputs are missing, nextAction must be to answer the most important clarifying question; otherwise it must name the smallest safe implementation step.',
+    '- codexPrompt must be ready to give to Code mode. It must include strict scope, files likely to inspect/edit, files or areas to avoid, required behavior, checks to run, and final report requirements. It must not ask Code mode to do broad refactors.',
+    '- Prefer fewer, sharper items over long generic lists.',
     '',
     'Required JSON schema:',
     '{"goal":"string","currentUnderstanding":"string","clarifyingQuestions":["string"],"scope":["string"],"exclusions":["string"],"steps":[{"title":"string","status":"todo"}],"inspectFiles":["string"],"suggestedFiles":["string"],"avoidFiles":["string"],"risks":["string"],"verification":["string"],"nextAction":"string","codexPrompt":"string"}',
@@ -344,6 +410,54 @@ function createCoworkPlannerPrompt(draft) {
   ].join('\n');
 }
 
+function createCoworkPlannerRetryPrompt(originalPrompt, previousResponse, blocking = []) {
+  return [
+    'The previous Cowork planner response did not meet the quality contract.',
+    'Revise it once. Return strict JSON only using the same required schema.',
+    'Do not make the answer longer for its own sake. Make it more specific, actionable, and ready for Code mode handoff.',
+    '',
+    'Quality failures to fix:',
+    formatCoworkList(blocking),
+    '',
+    'Original planner request:',
+    originalPrompt,
+    '',
+    'Previous response:',
+    truncateCoworkPlannerRetryText(previousResponse),
+  ].join('\n');
+}
+
+function createCoworkPlannerJsonRepairPrompt(originalPrompt, previousResponse, parseError = '') {
+  return [
+    'The previous Cowork planner response was not valid JSON.',
+    'Repair it once. Return strict JSON only using the required schema below.',
+    'Do not include markdown fences, explanations, comments, or any text outside the JSON object.',
+    'Preserve useful task-specific details from the previous response when possible.',
+    'If the previous response cannot be reused, create a valid high-quality planner response from the original planner request.',
+    'Use the same language as the user input when practical.',
+    '',
+    'Required JSON schema:',
+    COWORK_PLANNER_RESPONSE_SCHEMA,
+    '',
+    'Parse error:',
+    parseError || 'invalid JSON',
+    '',
+    'Original planner request:',
+    originalPrompt,
+    '',
+    'Previous response:',
+    truncateCoworkPlannerRetryText(previousResponse),
+  ].join('\n');
+}
+
+function truncateCoworkPlannerRetryText(value = '') {
+  const text = String(value);
+  if (text.length <= MAX_COWORK_PLANNER_RETRY_TEXT_LENGTH) {
+    return text;
+  }
+  return `${text.slice(0, MAX_COWORK_PLANNER_RETRY_TEXT_LENGTH)}\n[truncated]`;
+}
+
 function unwrapCoworkJson(rawText = '') {
   const text = String(rawText).trim();
   const fenced = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -364,6 +478,9 @@ function hasSuspiciousCoworkPlannerContent(planner) {
     planner.currentUnderstanding,
     planner.nextAction,
     planner.codexPrompt,
+    planner.decision?.question,
+    planner.decision?.reason,
+    planner.decision?.impact,
     ...planner.clarifyingQuestions,
     ...planner.scope,
     ...planner.exclusions,
@@ -372,8 +489,176 @@ function hasSuspiciousCoworkPlannerContent(planner) {
     ...planner.risks,
     ...planner.verification,
     ...planner.steps.map((step) => step.title),
+    ...(planner.decision?.options ?? []).flatMap((option) => [option.label, option.description]),
   ];
   return textParts.some(isSuspiciousCoworkText);
+}
+
+function getCoworkWordCount(value = '') {
+  const text = String(value).trim();
+  return text ? text.split(/\s+/).filter(Boolean).length : 0;
+}
+
+function hasCoworkSpecificAnchor(value = '') {
+  return COWORK_SPECIFIC_ANCHOR_PATTERN.test(String(value));
+}
+
+function isLowInformationCoworkItem(value = '') {
+  const text = String(value).trim();
+  if (!text) {
+    return true;
+  }
+
+  const isGeneric = COWORK_GENERIC_PLAN_PATTERN.test(text);
+  const hasSpecificAnchor = hasCoworkSpecificAnchor(text);
+  const hasEnoughShape = getCoworkWordCount(text) >= 4 || /[.:;()]/.test(text);
+  return (isGeneric && !hasSpecificAnchor) || (!hasSpecificAnchor && !hasEnoughShape);
+}
+
+function hasActionableCoworkItem(value = '') {
+  const text = String(value).trim();
+  if (isLowInformationCoworkItem(text)) {
+    return false;
+  }
+  return /[a-z0-9)]/i.test(text);
+}
+
+function hasReadyCodexPrompt(value = '') {
+  const text = String(value).trim();
+  if (!text) {
+    return false;
+  }
+
+  const checks = [
+    /\bscope\b|strict scope|out of scope/i,
+    /\bfiles?\b|areas?\b|inspect|edit/i,
+    /\bavoid\b|do not|must not|forbidden/i,
+    /\bbehavior\b|required|expected|must\b/i,
+    /\bchecks?\b|verify|verification|test/i,
+    /final report|report in|summary/i,
+  ];
+
+  const matched = checks.filter((pattern) => pattern.test(text)).length;
+  return matched >= 4;
+}
+
+function hasUsefulUnderstanding(planner) {
+  const text = planner.currentUnderstanding;
+  if (!text) {
+    return false;
+  }
+  if (isLowInformationCoworkItem(text)) {
+    return false;
+  }
+
+  return hasCoworkSpecificAnchor(text) || planner.scope.length > 0 || planner.exclusions.length > 0;
+}
+
+function validateCoworkPlannerQuality(planner) {
+  const blocking = [];
+  const warnings = [];
+
+  if (planner.responseMode === 'decision') {
+    return validateCoworkPlannerDecisionQuality(planner);
+  }
+
+  if (!hasUsefulUnderstanding(planner)) {
+    blocking.push('currentUnderstanding lacks concrete goal, constraint, or unknown detail');
+  }
+
+  const actionableSteps = planner.steps.filter((step) => hasActionableCoworkItem(step.title));
+  if (planner.steps.length === 0) {
+    blocking.push('plan has no steps');
+  } else if (actionableSteps.length === 0) {
+    blocking.push('plan steps lack actionable target detail');
+  }
+
+  if (!hasActionableCoworkItem(planner.nextAction)) {
+    blocking.push('nextAction is missing an immediate action and target');
+  }
+
+  if (!hasReadyCodexPrompt(planner.codexPrompt)) {
+    blocking.push('codexPrompt is not ready for scoped Code mode handoff');
+  }
+
+  if (planner.scope.length === 0) {
+    warnings.push('Cowork planner returned no explicit scope items.');
+  }
+  if (planner.exclusions.length === 0) {
+    warnings.push('Cowork planner returned no explicit exclusions.');
+  }
+  if (planner.risks.length === 0) {
+    warnings.push('Cowork planner returned no task-specific risks.');
+  }
+  if (planner.verification.length === 0) {
+    warnings.push('Cowork planner returned no verification checks.');
+  }
+  if (planner.clarifyingQuestions.length > 5) {
+    warnings.push('Cowork planner returned more clarifying questions than the quality contract prefers.');
+  }
+
+  const weakStep = planner.steps.find((step) => isLowInformationCoworkItem(step.title));
+  if (weakStep) {
+    warnings.push('Cowork planner returned at least one step without concrete target detail.');
+  }
+  if (planner.risks.length > 0 && planner.risks.every(isLowInformationCoworkItem)) {
+    blocking.push('risks lack concrete failure mode detail');
+  } else if (planner.risks.some(isLowInformationCoworkItem)) {
+    warnings.push('Cowork planner returned at least one risk without concrete failure mode detail.');
+  }
+  if (planner.verification.length > 0 && planner.verification.every(isLowInformationCoworkItem)) {
+    blocking.push('verification lacks concrete expected-result detail');
+  } else if (planner.verification.some(isLowInformationCoworkItem)) {
+    warnings.push('Cowork planner returned at least one verification check without expected-result detail.');
+  }
+
+  return { blocking, warnings };
+}
+
+function validateCoworkPlannerDecisionQuality(planner) {
+  const blocking = [];
+  const warnings = [];
+  const decision = planner.decision;
+
+  if (!decision) {
+    blocking.push('decision response is missing a decision object');
+    return { blocking, warnings };
+  }
+
+  if (isLowInformationCoworkItem(decision.question)) {
+    blocking.push('decision question lacks concrete implementation impact');
+  }
+  if (isLowInformationCoworkItem(decision.reason)) {
+    blocking.push('decision reason does not explain why guessing is unsafe');
+  }
+  if (isLowInformationCoworkItem(decision.impact)) {
+    blocking.push('decision impact does not explain how the answer changes the plan');
+  }
+  if (decision.options.length < 2) {
+    blocking.push('decision must provide at least two concrete options');
+  }
+  if (decision.options.length > MAX_COWORK_DECISION_OPTIONS) {
+    warnings.push('Cowork planner returned more decision options than the UI supports.');
+  }
+  if (!decision.allowCustomAnswer) {
+    blocking.push('decision must allow a custom answer');
+  }
+
+  const weakOption = decision.options.find(
+    (option) => isLowInformationCoworkItem(option.label) || isLowInformationCoworkItem(option.description),
+  );
+  if (weakOption) {
+    blocking.push('decision options must include concrete labels and descriptions');
+  }
+
+  if (
+    decision.recommendedOptionId &&
+    !decision.options.some((option) => option.id === decision.recommendedOptionId)
+  ) {
+    warnings.push('Cowork planner recommended an option that is not present.');
+  }
+
+  return { blocking, warnings };
 }
 
 function parseCoworkPlannerResponse(rawText = '') {
@@ -386,7 +671,10 @@ function parseCoworkPlannerResponse(rawText = '') {
     throw error;
   }
 
+  const decision = sanitizeCoworkDecision(parsed.decision);
+  const responseMode = parsed.responseMode === 'decision' && decision ? 'decision' : 'plan';
   const planner = {
+    responseMode,
     goal: sanitizeCoworkText(parsed.goal),
     currentUnderstanding: sanitizeCoworkText(parsed.currentUnderstanding),
     clarifyingQuestions: sanitizeCoworkList(parsed.clarifyingQuestions),
@@ -406,6 +694,7 @@ function parseCoworkPlannerResponse(rawText = '') {
     verification: sanitizeCoworkList(parsed.verification),
     nextAction: sanitizeCoworkText(parsed.nextAction),
     codexPrompt: sanitizeCoworkText(parsed.codexPrompt, MAX_COWORK_CODEX_PROMPT_LENGTH),
+    decision: responseMode === 'decision' ? decision : null,
   };
 
   if (hasSuspiciousCoworkPlannerContent(planner)) {
@@ -415,6 +704,45 @@ function parseCoworkPlannerResponse(rawText = '') {
   }
 
   return planner;
+}
+
+function isCoworkPlannerInvalidJsonError(error) {
+  return error?.message === 'Cowork planner returned invalid JSON.';
+}
+
+async function sendCoworkPlannerFollowup({
+  abortController,
+  client,
+  conversationId,
+  prompt,
+  userMCPAuthMap,
+}) {
+  const userMessageId = randomUUID();
+  const responseMessageId = randomUUID();
+  const now = new Date().toISOString();
+
+  client.parentMessageId = userMessageId;
+  client.responseMessageId = responseMessageId;
+
+  const payload = [
+    {
+      messageId: userMessageId,
+      parentMessageId: Constants.NO_PARENT,
+      conversationId,
+      text: prompt,
+      sender: 'User',
+      isCreatedByUser: true,
+      createdAt: now,
+      updatedAt: now,
+    },
+  ];
+
+  const { completion } = await client.sendCompletion(payload, {
+    abortController,
+    userMCPAuthMap,
+  });
+
+  return extractCompletionText(completion);
 }
 
 function prepareCoworkPlannerRequest(req, _res, next) {
@@ -1604,7 +1932,92 @@ router.post(
         });
       }
 
-      const planner = parseCoworkPlannerResponse(text);
+      let planner;
+      let plannerText = text;
+      try {
+        planner = parseCoworkPlannerResponse(plannerText);
+      } catch (error) {
+        if (!isCoworkPlannerInvalidJsonError(error)) {
+          throw error;
+        }
+
+        const repairPrompt = createCoworkPlannerJsonRepairPrompt(prompt, plannerText, error.message);
+        const repairText = await sendCoworkPlannerFollowup({
+          abortController,
+          client,
+          conversationId,
+          prompt: repairPrompt,
+          userMCPAuthMap,
+        });
+
+        if (!repairText) {
+          return res.status(502).json({
+            ok: false,
+            error: 'Cowork planner JSON repair returned an empty response.',
+            warnings,
+          });
+        }
+
+        plannerText = repairText;
+        planner = parseCoworkPlannerResponse(plannerText);
+      }
+
+      let quality = validateCoworkPlannerQuality(planner);
+      if (quality.blocking.length > 0) {
+        const retryText = await sendCoworkPlannerFollowup({
+          abortController,
+          client,
+          conversationId,
+          prompt: createCoworkPlannerRetryPrompt(prompt, plannerText, quality.blocking),
+          userMCPAuthMap,
+        });
+        if (!retryText) {
+          return res.status(502).json({
+            ok: false,
+            error: 'Cowork planner retry returned an empty response.',
+            warnings,
+          });
+        }
+
+        plannerText = retryText;
+        try {
+          planner = parseCoworkPlannerResponse(plannerText);
+        } catch (error) {
+          if (!isCoworkPlannerInvalidJsonError(error)) {
+            throw error;
+          }
+
+          const repairText = await sendCoworkPlannerFollowup({
+            abortController,
+            client,
+            conversationId,
+            prompt: createCoworkPlannerJsonRepairPrompt(prompt, plannerText, error.message),
+            userMCPAuthMap,
+          });
+
+          if (!repairText) {
+            return res.status(502).json({
+              ok: false,
+              error: 'Cowork planner retry JSON repair returned an empty response.',
+              warnings,
+            });
+          }
+
+          plannerText = repairText;
+          planner = parseCoworkPlannerResponse(plannerText);
+        }
+        quality = validateCoworkPlannerQuality(planner);
+      }
+
+      warnings.push(...quality.warnings);
+      if (quality.blocking.length > 0) {
+        const error = new Error(
+          `Cowork planner did not meet quality contract: ${quality.blocking.join('; ')}`,
+        );
+        error.status = 502;
+        throw error;
+      }
+
       return res.json({
         ok: true,
         planner,

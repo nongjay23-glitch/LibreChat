@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { SendIcon, TextareaAutosize } from "@librechat/client";
 import {
@@ -24,12 +24,14 @@ import type {
 import { request } from "librechat-data-provider";
 import { useRecoilValue } from "recoil";
 import type {
+  CoworkDecisionOption,
   CoworkMessage,
   CoworkMessageModel,
   CoworkPlannerResult,
   CoworkProject,
   CoworkRoom,
 } from "./coworkRooms";
+import MarkdownLite from "~/components/Chat/Messages/Content/MarkdownLite";
 import MessageTimestamp from "~/components/Chat/Messages/ui/MessageTimestamp";
 import { useLocalize } from "~/hooks";
 import { fontSizeAtom } from "~/store/fontSize";
@@ -82,6 +84,12 @@ type CoworkPlannerPayload = {
   chatProjectId?: string | null;
 };
 
+type CoworkPlanRequest = {
+  roomId: string;
+  task: string;
+  model: CoworkMessageModel;
+};
+
 function parseCoworkCommand(value: string) {
   const trimmedValue = value.trim();
   const match = /^\/plan(?:\s+([\s\S]*))?$/i.exec(trimmedValue);
@@ -130,11 +138,62 @@ function getPlannerSteps(value: unknown): CoworkPlannerResult["steps"] {
     .filter((step) => step.title.length > 0);
 }
 
+function getPlannerDecision(value: unknown): CoworkPlannerResult["decision"] {
+  if (value == null || typeof value !== "object") {
+    return null;
+  }
+
+  const candidate = value as {
+    question?: unknown;
+    reason?: unknown;
+    impact?: unknown;
+    recommendedOptionId?: unknown;
+    options?: unknown;
+    allowCustomAnswer?: unknown;
+  };
+  const options = Array.isArray(candidate.options)
+    ? candidate.options
+        .map((option, index) => {
+          const optionCandidate =
+            option != null && typeof option === "object"
+              ? (option as { id?: unknown; label?: unknown; description?: unknown })
+              : null;
+          return {
+            id: getPlannerText(optionCandidate?.id) || `option-${index + 1}`,
+            label: getPlannerText(optionCandidate?.label),
+            description: getPlannerText(optionCandidate?.description),
+          };
+        })
+        .filter((option) => option.label.length > 0 && option.description.length > 0)
+        .slice(0, 4)
+    : [];
+  const recommendedOptionId = getPlannerText(candidate.recommendedOptionId);
+  const validRecommendedOptionId = options.some((option) => option.id === recommendedOptionId)
+    ? recommendedOptionId
+    : "";
+  const decision = {
+    question: getPlannerText(candidate.question),
+    reason: getPlannerText(candidate.reason),
+    impact: getPlannerText(candidate.impact),
+    recommendedOptionId: validRecommendedOptionId,
+    options,
+    allowCustomAnswer: candidate.allowCustomAnswer !== false,
+  };
+
+  if (!decision.question || options.length === 0) {
+    return null;
+  }
+
+  return decision;
+}
+
 function normalizePlannerResult(
   planner: Partial<CoworkPlannerResult> | undefined,
   warnings: string[] | undefined,
 ): CoworkPlannerResult {
+  const decision = getPlannerDecision(planner?.decision);
   return {
+    responseMode: planner?.responseMode === "decision" && decision ? "decision" : "plan",
     goal: getPlannerText(planner?.goal),
     currentUnderstanding: getPlannerText(planner?.currentUnderstanding),
     clarifyingQuestions: getPlannerList(planner?.clarifyingQuestions),
@@ -149,7 +208,15 @@ function normalizePlannerResult(
     nextAction: getPlannerText(planner?.nextAction),
     codexPrompt: getPlannerText(planner?.codexPrompt),
     warnings: getPlannerList(warnings),
+    decision,
   };
+}
+
+function getPlannerMessageContent(plannerResult: CoworkPlannerResult, fallback: string) {
+  if (plannerResult.responseMode === "decision" && plannerResult.decision) {
+    return plannerResult.decision.question;
+  }
+  return plannerResult.currentUnderstanding || plannerResult.goal || fallback;
 }
 
 function getRequestErrorMessage(error: unknown, fallback: string) {
@@ -175,14 +242,65 @@ function getRecentCoworkChatMessages(messages: CoworkMessage[]) {
     }));
 }
 
+function StreamingCoworkText({
+  animate,
+  className,
+  text,
+}: {
+  animate: boolean;
+  className: string;
+  text: string;
+}) {
+  const [visibleText, setVisibleText] = useState(animate ? "" : text);
+
+  useEffect(() => {
+    if (!animate) {
+      setVisibleText(text);
+      return;
+    }
+
+    const characters = Array.from(text);
+    let cursor = 0;
+    let timeoutId = 0;
+
+    const tick = () => {
+      cursor = Math.min(cursor + 2, characters.length);
+      setVisibleText(characters.slice(0, cursor).join(""));
+      if (cursor < characters.length) {
+        timeoutId = window.setTimeout(tick, 16);
+      }
+    };
+
+    timeoutId = window.setTimeout(tick, 40);
+    return () => window.clearTimeout(timeoutId);
+  }, [animate, text]);
+
+  return (
+    <div className={className} aria-live={animate ? "polite" : undefined}>
+      <MarkdownLite content={visibleText} codeExecution={false} />
+      {animate && visibleText.length < text.length ? (
+        <span className="ml-0.5 inline-block h-4 w-1 animate-pulse rounded-full bg-text-secondary align-middle" />
+      ) : null}
+    </div>
+  );
+}
+
 function CoworkMessageRow({
+  animateAssistant,
   copiedMessageId,
   message,
   onCopyCodexPrompt,
+  onSubmitDecisionAnswer,
 }: {
+  animateAssistant: boolean;
   copiedMessageId: string;
   message: CoworkMessage;
   onCopyCodexPrompt: (message: CoworkMessage) => void;
+  onSubmitDecisionAnswer: (
+    message: CoworkMessage,
+    option: CoworkDecisionOption | null,
+    customAnswer: string,
+  ) => void;
 }) {
   const fontSize = useAtomValue(fontSizeAtom);
   const localize = useLocalize();
@@ -216,9 +334,11 @@ function CoworkMessageRow({
                 <MessageTimestamp value={message.createdAt} />
               </h2>
               <CoworkAssistantCard
+                animateText={animateAssistant}
                 copied={copiedMessageId === message.id}
                 message={message}
                 onCopyCodexPrompt={onCopyCodexPrompt}
+                onSubmitDecisionAnswer={onSubmitDecisionAnswer}
               />
             </div>
           </div>
@@ -285,14 +405,115 @@ function PlannerList({ items, title }: { items: string[]; title: string }) {
   );
 }
 
+function CoworkDecisionCard({
+  message,
+  onSubmitDecisionAnswer,
+}: {
+  message: CoworkMessage;
+  onSubmitDecisionAnswer: (
+    message: CoworkMessage,
+    option: CoworkDecisionOption | null,
+    customAnswer: string,
+  ) => void;
+}) {
+  const localize = useLocalize();
+  const [customAnswer, setCustomAnswer] = useState("");
+  const decision = message.plannerResult?.decision;
+
+  if (!decision) {
+    return null;
+  }
+
+  const submitCustomAnswer = () => {
+    const answer = customAnswer.trim();
+    if (!answer) {
+      return;
+    }
+    onSubmitDecisionAnswer(message, null, answer);
+    setCustomAnswer("");
+  };
+
+  return (
+    <div className="mt-2 rounded-lg border border-border-light bg-surface-primary p-3 text-sm text-text-primary shadow-sm">
+      <div className="font-semibold">{decision.question}</div>
+      {decision.reason ? (
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-text-secondary">
+          {decision.reason}
+        </p>
+      ) : null}
+      {decision.impact ? (
+        <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-text-tertiary">
+          {decision.impact}
+        </p>
+      ) : null}
+
+      <div className="mt-3 space-y-2">
+        {decision.options.map((option) => {
+          const isRecommended = option.id === decision.recommendedOptionId;
+          return (
+            <button
+              type="button"
+              key={`${message.id}-${option.id}`}
+              onClick={() => onSubmitDecisionAnswer(message, option, "")}
+              className="w-full rounded-lg border border-border-light bg-surface-secondary px-3 py-2 text-left transition-colors hover:bg-surface-hover"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-text-primary">{option.label}</span>
+                {isRecommended ? (
+                  <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-[11px] font-semibold text-blue-400">
+                    {localize("com_ui_cowork_decision_recommended")}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-1 text-xs leading-5 text-text-secondary">
+                {option.description}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {decision.allowCustomAnswer ? (
+        <div className="mt-3 rounded-lg border border-border-light bg-surface-secondary p-2">
+          <textarea
+            rows={2}
+            value={customAnswer}
+            onChange={(event) => setCustomAnswer(event.target.value)}
+            placeholder={localize("com_ui_cowork_decision_custom_placeholder")}
+            className="w-full resize-none bg-transparent text-sm text-text-primary outline-none placeholder:text-text-tertiary"
+          />
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={submitCustomAnswer}
+              disabled={!customAnswer.trim()}
+              className="inline-flex h-8 items-center rounded-md bg-surface-active px-3 text-xs font-semibold text-text-primary hover:bg-surface-active-alt disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {localize("com_ui_cowork_decision_send_custom")}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CoworkAssistantCard({
+  animateText,
   copied,
   message,
   onCopyCodexPrompt,
+  onSubmitDecisionAnswer,
 }: {
+  animateText: boolean;
   copied: boolean;
   message: CoworkMessage;
   onCopyCodexPrompt: (message: CoworkMessage) => void;
+  onSubmitDecisionAnswer: (
+    message: CoworkMessage,
+    option: CoworkDecisionOption | null,
+    customAnswer: string,
+  ) => void;
 }) {
   const localize = useLocalize();
   const planner = message.plannerResult;
@@ -313,9 +534,20 @@ function CoworkAssistantCard({
 
   if (!planner) {
     return (
-      <div className="mt-2 whitespace-pre-wrap text-sm leading-7 text-text-primary">
-        {message.content}
-      </div>
+      <StreamingCoworkText
+        animate={animateText}
+        className="mt-2 text-sm leading-7 text-text-primary [&_h1]:mb-2 [&_h1]:mt-4 [&_h2]:mb-2 [&_h2]:mt-4 [&_h3]:mb-2 [&_h3]:mt-4 [&_li]:my-1 [&_ol]:my-2 [&_p:last-child]:mb-0 [&_p]:mb-2 [&_ul]:my-2"
+        text={message.content}
+      />
+    );
+  }
+
+  if (planner.responseMode === "decision" && planner.decision) {
+    return (
+      <CoworkDecisionCard
+        message={message}
+        onSubmitDecisionAnswer={onSubmitDecisionAnswer}
+      />
     );
   }
 
@@ -517,11 +749,54 @@ function CoworkMessagesView({
   copiedMessageId,
   messages,
   onCopyCodexPrompt,
+  onSubmitDecisionAnswer,
+  roomId,
 }: {
   copiedMessageId: string;
   messages: CoworkMessage[];
   onCopyCodexPrompt: (message: CoworkMessage) => void;
+  onSubmitDecisionAnswer: (
+    message: CoworkMessage,
+    option: CoworkDecisionOption | null,
+    customAnswer: string,
+  ) => void;
+  roomId: string;
 }) {
+  const previousRoomIdRef = useRef(roomId);
+  const previousMessageIdsRef = useRef(new Set(messages.map((message) => message.id)));
+  const [animatedMessageIds, setAnimatedMessageIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const currentMessageIds = new Set(messages.map((message) => message.id));
+    if (previousRoomIdRef.current !== roomId) {
+      previousRoomIdRef.current = roomId;
+      previousMessageIdsRef.current = currentMessageIds;
+      setAnimatedMessageIds(new Set());
+      return;
+    }
+
+    const nextAnimatedIds = messages
+      .filter(
+        (message) =>
+          message.role === "assistant" &&
+          !message.error &&
+          !message.plannerResult &&
+          !previousMessageIdsRef.current.has(message.id),
+      )
+      .map((message) => message.id);
+
+    previousMessageIdsRef.current = currentMessageIds;
+    if (nextAnimatedIds.length === 0) {
+      return;
+    }
+
+    setAnimatedMessageIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      nextAnimatedIds.forEach((messageId) => nextIds.add(messageId));
+      return nextIds;
+    });
+  }, [messages, roomId]);
+
   return (
     <div className="relative flex-1 overflow-hidden overflow-y-auto">
       <div className="relative h-full">
@@ -536,10 +811,12 @@ function CoworkMessagesView({
           <div className="flex flex-col pb-9 pt-14 dark:bg-transparent">
             {messages.map((message) => (
               <CoworkMessageRow
+                animateAssistant={animatedMessageIds.has(message.id)}
                 key={message.id}
                 copiedMessageId={copiedMessageId}
                 message={message}
                 onCopyCodexPrompt={onCopyCodexPrompt}
+                onSubmitDecisionAnswer={onSubmitDecisionAnswer}
               />
             ))}
             <div
@@ -840,6 +1117,107 @@ export default function CoworkChatView() {
     window.setTimeout(() => setCopiedMessageId(""), 1600);
   };
 
+  const requestCoworkPlan = async ({ roomId, task, model }: CoworkPlanRequest) => {
+    if (!model.endpoint) {
+      addAssistantMessage(roomId, {
+        content: "",
+        error: localize("com_ui_cowork_planner_missing_endpoint"),
+        model,
+      });
+      return;
+    }
+
+    setPendingRoomId(roomId);
+    setPendingKind("plan");
+    try {
+      const payload: CoworkPlannerPayload = {
+        goal: task,
+        scope: [],
+        exclusions: [],
+        steps: [],
+        inspectFiles: [],
+        suggestedFiles: [],
+        avoidFiles: [],
+        risks: [],
+        verification: [],
+        nextAction: "",
+        endpoint: model.endpoint,
+        endpointType: model.endpointType,
+        model: model.model,
+        spec: model.spec,
+        agent_id: model.agent_id,
+        chatProjectId: model.chatProjectId,
+      };
+      const data = (await request.post(
+        "/api/workspace/cowork/planner",
+        payload,
+      )) as CoworkPlannerResponse;
+
+      if (!data?.ok || !data.planner) {
+        throw new Error(data?.error || localize("com_ui_cowork_planner_error"));
+      }
+
+      const plannerResult = normalizePlannerResult(data.planner, data.warnings);
+      addAssistantMessage(roomId, {
+        content: getPlannerMessageContent(
+          plannerResult,
+          localize("com_ui_cowork_planner_preview"),
+        ),
+        plannerResult,
+        model,
+      });
+    } catch (error) {
+      addAssistantMessage(roomId, {
+        content: "",
+        error: getRequestErrorMessage(error, localize("com_ui_cowork_planner_error")),
+        model,
+      });
+    } finally {
+      setPendingRoomId("");
+      setPendingKind("");
+    }
+  };
+
+  const handleSubmitDecisionAnswer = (
+    message: CoworkMessage,
+    option: CoworkDecisionOption | null,
+    customAnswer: string,
+  ) => {
+    if (!activeRoom || pendingRoomId) {
+      return;
+    }
+
+    const decision = message.plannerResult?.decision;
+    const planner = message.plannerResult;
+    if (!decision || !planner) {
+      return;
+    }
+
+    const answer = option
+      ? `${option.label}\n${option.description}`
+      : customAnswer.trim();
+    if (!answer) {
+      return;
+    }
+
+    const userMessage = option
+      ? `${localize("com_ui_cowork_decision_selected")}: ${option.label}`
+      : answer;
+    const nextTask = [
+      `Original goal:\n${planner.goal || planner.currentUnderstanding || message.content}`,
+      `Decision question:\n${decision.question}`,
+      `User answer:\n${answer}`,
+      'Continue the /plan flow. If another implementation-blocking decision is still missing, ask the next single decision. If enough information is available, return a scoped plan.',
+    ].join("\n\n");
+
+    addMessage(activeRoom.id, userMessage);
+    void requestCoworkPlan({
+      roomId: activeRoom.id,
+      task: nextTask,
+      model: selectedModel,
+    });
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const prompt = draft.trim();
@@ -925,65 +1303,7 @@ export default function CoworkChatView() {
       return;
     }
 
-    const model = selectedModel;
-    if (!model.endpoint) {
-      addAssistantMessage(roomId, {
-        content: "",
-        error: localize("com_ui_cowork_planner_missing_endpoint"),
-        model,
-      });
-      return;
-    }
-
-    setPendingRoomId(roomId);
-    setPendingKind("plan");
-    try {
-      const payload: CoworkPlannerPayload = {
-        goal: command.task,
-        scope: [],
-        exclusions: [],
-        steps: [],
-        inspectFiles: [],
-        suggestedFiles: [],
-        avoidFiles: [],
-        risks: [],
-        verification: [],
-        nextAction: "",
-        endpoint: model.endpoint,
-        endpointType: model.endpointType,
-        model: model.model,
-        spec: model.spec,
-        agent_id: model.agent_id,
-        chatProjectId: model.chatProjectId,
-      };
-      const data = (await request.post(
-        "/api/workspace/cowork/planner",
-        payload,
-      )) as CoworkPlannerResponse;
-
-      if (!data?.ok || !data.planner) {
-        throw new Error(data?.error || localize("com_ui_cowork_planner_error"));
-      }
-
-      const plannerResult = normalizePlannerResult(data.planner, data.warnings);
-      addAssistantMessage(roomId, {
-        content:
-          plannerResult.currentUnderstanding ||
-          plannerResult.goal ||
-          localize("com_ui_cowork_planner_preview"),
-        plannerResult,
-        model,
-      });
-    } catch (error) {
-      addAssistantMessage(roomId, {
-        content: "",
-        error: getRequestErrorMessage(error, localize("com_ui_cowork_planner_error")),
-        model,
-      });
-    } finally {
-      setPendingRoomId("");
-      setPendingKind("");
-    }
+    await requestCoworkPlan({ roomId, task: command.task, model: selectedModel });
   };
 
   if (isProjectsViewOpen) {
@@ -1025,6 +1345,8 @@ export default function CoworkChatView() {
               copiedMessageId={copiedMessageId}
               messages={activeRoom.messages}
               onCopyCodexPrompt={handleCopyCodexPrompt}
+              onSubmitDecisionAnswer={handleSubmitDecisionAnswer}
+              roomId={activeRoom.id}
             />
           )}
 

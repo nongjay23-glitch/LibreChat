@@ -15,7 +15,23 @@ export type CoworkPlannerStep = {
   status: "todo";
 };
 
+export type CoworkDecisionOption = {
+  id: string;
+  label: string;
+  description: string;
+};
+
+export type CoworkDecision = {
+  question: string;
+  reason: string;
+  impact: string;
+  recommendedOptionId: string;
+  options: CoworkDecisionOption[];
+  allowCustomAnswer: boolean;
+};
+
 export type CoworkPlannerResult = {
+  responseMode: "plan" | "decision";
   goal: string;
   currentUnderstanding: string;
   clarifyingQuestions: string[];
@@ -30,6 +46,7 @@ export type CoworkPlannerResult = {
   nextAction: string;
   codexPrompt: string;
   warnings: string[];
+  decision: CoworkDecision | null;
 };
 
 export type CoworkMessageModel = {
@@ -221,12 +238,52 @@ function normalizePlannerSteps(value: unknown): CoworkPlannerStep[] {
     .filter((step) => step.title.length > 0);
 }
 
+function normalizeDecision(value: unknown): CoworkDecision | null {
+  if (!isObjectRecord(value)) {
+    return null;
+  }
+
+  const options = Array.isArray(value.options)
+    ? value.options
+        .filter(isObjectRecord)
+        .map((option, index) => ({
+          id: getString(option.id) || `option-${index + 1}`,
+          label: getString(option.label),
+          description: getString(option.description),
+        }))
+        .filter((option) => option.label.length > 0 && option.description.length > 0)
+        .slice(0, 4)
+    : [];
+
+  const recommendedOptionId = getString(value.recommendedOptionId);
+  const validRecommendedOptionId = options.some((option) => option.id === recommendedOptionId)
+    ? recommendedOptionId
+    : "";
+
+  const decision: CoworkDecision = {
+    question: getString(value.question),
+    reason: getString(value.reason),
+    impact: getString(value.impact),
+    recommendedOptionId: validRecommendedOptionId,
+    options,
+    allowCustomAnswer: value.allowCustomAnswer !== false,
+  };
+
+  if (!decision.question || options.length === 0) {
+    return null;
+  }
+
+  return decision;
+}
+
 function normalizePlannerResult(value: unknown): CoworkPlannerResult | null {
   if (!isObjectRecord(value)) {
     return null;
   }
 
+  const decision = normalizeDecision(value.decision);
   return {
+    responseMode: value.responseMode === "decision" && decision ? "decision" : "plan",
     goal: getString(value.goal),
     currentUnderstanding: getString(value.currentUnderstanding),
     clarifyingQuestions: getStringArray(value.clarifyingQuestions),
@@ -241,6 +298,7 @@ function normalizePlannerResult(value: unknown): CoworkPlannerResult | null {
     nextAction: getString(value.nextAction),
     codexPrompt: getString(value.codexPrompt),
     warnings: getStringArray(value.warnings),
+    decision,
   };
 }
 
