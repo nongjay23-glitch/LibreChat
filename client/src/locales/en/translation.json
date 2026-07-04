@@ -1101,6 +1101,8 @@
   "com_ui_cowork_decision_recommended": "แนะนำ",
   "com_ui_cowork_decision_selected": "เลือก",
   "com_ui_cowork_decision_send_custom": "ส่งคำตอบ",
+  "com_ui_cowork_decision_start_plan": "เริ่มทำแผนเลย",
+  "com_ui_cowork_decision_start_plan_hint": "ตอบคำถามต่อ หรือข้ามไปทำแผนด้วยข้อมูลที่มีตอนนี้",
   "com_ui_cowork_decision_why": "ทำไมถามข้อนี้",
   "com_ui_cowork_local_only": "Cowork AI",
   "com_ui_cowork_local_only_note": "Cowork messages save locally and stay separate from normal Chat history. Cowork does not edit files or run tools in this phase.",
