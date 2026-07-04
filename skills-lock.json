@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "debug-mantra": {
+      "source": "thananon/9arm-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/debug-mantra/SKILL.md",
+      "computedHash": "85875eb0c8570b163a3ff79c8ecc1bfb54152c1431b2d3ac247be176d951aa78"
+    },
+    "diagnosing-bugs": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/diagnosing-bugs/SKILL.md",
+      "computedHash": "c8743c51df3760039b2dcb8a5a61437da3128c6efb4c5381734a3f05403e9a84"
+    },
+    "grill-with-docs": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/grill-with-docs/SKILL.md",
+      "computedHash": "559d4de044394b86af53a5cedd2d3a689770088c3c5361646c91f5d7ea59f78a"
+    },
+    "improve-codebase-architecture": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/improve-codebase-architecture/SKILL.md",
+      "computedHash": "4c4d2b6da48482c1a054aca0e09eafd61cdcbebe2bda10abd3f355bf5f6fc57c"
+    },
+    "scrutinize": {
+      "source": "thananon/9arm-skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/scrutinize/SKILL.md",
+      "computedHash": "f09f6aad95f504b0c54c46733fa9a967db9a72a05b7b4605909dcbb77f1b1553"
+    },
+    "tdd": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/tdd/SKILL.md",
+      "computedHash": "f23403cf05c3a4b0dec9983f7818cf1b53ebddd9cc406593fa46d9694b8c259a"
+    }
+  }
+}

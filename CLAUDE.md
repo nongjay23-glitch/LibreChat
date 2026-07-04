@@ -1,8 +1,35 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # LibreChat
 
 ## Project Overview
 
-LibreChat is a monorepo with the following key workspaces:
+This is a customized fork of [LibreChat](https://librechat.ai) (`origin` = `nongjay23-glitch/LibreChat`, `upstream` = `danny-avila/LibreChat`). On top of stock LibreChat, this fork adds a custom multi-mode AI workspace built around three modes, switchable via `client/src/components/Workspace/WorkspaceModeTabs.tsx`:
+
+- **Chat** — normal LibreChat conversation surface, plus a Notebook/Sources knowledge/reference mode (read-only; source Q&A and notes, no file or tool actions).
+- **Cowork** — task-focused planning chat (rooms/projects, `/ask` and `/plan`, planner + decision cards, Codex prompt handoff). Read-only planning only: it must never write normal Chat conversations/messages, mutate files, run terminal commands, apply patches, or create checkpoints.
+- **Code** — the only mode allowed to touch real files: diff review, patch apply, checkpoint, rollback, and verification.
+
+**Before editing any workspace-mode file, read `SYSTEM_FILE_MAP.md`.** It is the source of truth for which files belong to Chat/Cowork/Code/Notebook and the safety boundaries between them — don't infer ownership just by reading the code. Other living project docs, kept up to date separately from this file:
+
+- `COWORK_ROADMAP.md` — Cowork product direction and phases (not a file-ownership map).
+- `CODE_MODE_HANDOFF.md` — running handoff/checkpoint note for the custom workspace effort, including local dev URLs and default models.
+- `PROJECT_NOTES.md` — smaller in-flight features (e.g., Code-context attachments as temporary chat attachments).
+
+### Critical safety boundaries
+
+- Cowork must never write normal Chat conversations/DB messages, mutate files, run terminal/tool commands, apply patches, or create checkpoints — Code mode is the only real file-apply path.
+- Notebook/Sources is read/reference only; never mix it with Cowork file actions.
+- `api/server/routes/workspace.js` is shared by Cowork, Code, and Sources routes — scope edits narrowly to the mode you're changing; don't let a Cowork change alter Code-mode apply/checkpoint/rollback/verify behavior or vice versa.
+- Never edit `.env`, `.git`, `node_modules`, logs, uploads, database files, or binaries from workspace-mode code paths; these are blocked/constrained by the apply-patch safety logic on purpose.
+- `.workspace-activity.jsonl` and `.workspace-checkpoints/` are local runtime-only artifacts — do not commit them.
+- If a file's ownership/responsibility is unclear, treat it as `needs verification` in `SYSTEM_FILE_MAP.md` rather than guessing.
+
+## Monorepo Structure
+
+LibreChat (and this fork) is a monorepo with the following key workspaces:
 
 | Workspace | Language | Side | Dependency | Purpose |
 |---|---|---|---|---|
@@ -24,6 +51,30 @@ The source code for `@librechat/agents` (major backend dependency, same team) is
 - Database-specific shared logic goes in `/packages/data-schemas`.
 - Frontend/backend shared API logic (endpoints, types, data-service) goes in `/packages/data-provider`.
 - Build data-provider from project root: `npm run build:data-provider`.
+
+---
+
+## Backend Architecture (`/api`, `packages/api`)
+
+- `api/server/index.js` boots the Express app; `api/server/routes/*.js` define REST endpoints (one file per resource, e.g. `agents/`, `assistants/`, `files/`, `workspace.js`), which delegate to `api/server/controllers` and `api/server/services/*` (e.g. `services/MCP.js`, `services/Endpoints`, `services/Files`, `services/Runs`, `services/Tools`).
+- `api/server/middleware` holds auth/rate-limit/validation middleware; `api/models` holds Mongoose model accessors; `api/app` wires up model clients (`api/app/clients`) for the various AI providers.
+- `packages/api/src` is where new TypeScript backend logic lives, organized by domain (`agents`, `mcp`, `auth`, `oauth`, `endpoints`, `files`, `tools`, `skills`, `memory`, `prompts`, `acl`, `crypto`, `cache`, `cluster`, etc.) — `/api` should only thinly wrap these.
+- `packages/data-schemas/src` holds Mongoose schemas/models and DB migrations (`src/migrations`), shared by any backend workspace that touches the DB.
+- `packages/data-provider/src` is the shared contract between frontend and backend: API endpoint paths (`api-endpoints.ts`), the fetch layer (`data-service.ts`), and shared types — check here before adding a new type or endpoint path.
+
+## Frontend Architecture (`client/src`)
+
+- `client/src/routes` defines the router tree, e.g. `Root.tsx` (post-auth app shell hosting `UnifiedSidebar`) and `ChatRoute.tsx` (chooses between normal `ChatView` and `CoworkChatView` based on the active workspace panel).
+- `client/src/components` groups feature UI in directories, notably `components/Workspace/*` for the Cowork/Code/Sources panels (`CoworkChatView`, `CoworkRoomsList`, `CodePanel`, `SourcesPanel`) — see `SYSTEM_FILE_MAP.md` before editing these.
+- `client/src/hooks`, `client/src/store` (Recoil) hold cross-cutting state; `store/families.ts` includes Notebook/Sources state and current conversation/model-selection selectors.
+- `client/src/data-provider` wraps `packages/data-provider` react-query hooks per feature.
+- Cowork's local room/project/message state is a separate domain layer (`components/Workspace/coworkRooms.ts`) persisted to `localStorage` (`librechat.cowork.*` keys) — it is intentionally decoupled from the normal Chat conversation/message pipeline (`hooks/Messages/useSubmitMessage.ts`, `hooks/Chat/useChatHelpers.ts`).
+
+## Local Development Environment
+
+- Local stack is run via `docker-compose.local.yml` (app container `LibreChat`, Mongo container `chat-mongodb`); app is served at `http://localhost:3080`.
+- See `CODE_MODE_HANDOFF.md` for the current default/test model names and further local-environment notes.
+- Provider/API keys and other sensitive config live in local `.env`/config files — never print or commit them.
 
 ---
 
@@ -170,3 +221,70 @@ Multi-line imports count total character length across all lines. Consolidate va
 ## Formatting
 
 Fix all formatting lint errors (trailing spaces, tabs, newlines, indentation) using auto-fix when available. All TypeScript/ESLint warnings and errors **must** be resolved.
+ 
+--- 
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
