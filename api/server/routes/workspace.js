@@ -81,6 +81,8 @@ const COWORK_GENERIC_PLAN_PATTERN =
   /\b(improve|optimize|handle|implement feature|review code|test thoroughly|fix bugs|make it better|do the task|check everything|update things)\b/i;
 const COWORK_SPECIFIC_ANCHOR_PATTERN =
   /\/|\.[a-z0-9]{1,8}\b|localStorage|endpoint|route|payload|schema|state|history|conversation|message|room|project|model|planner|sidebar|composer|backend|frontend|api|UI|Chat|Cowork|Code|Notebook|Sources|sandbox|diff|verify|test|expected|avoid|scope|risk/i;
+const COWORK_ACTION_OFFER_PATTERN =
+  /ให้(?:ผม|ฉัน|ช่วย|เริ่ม)?(?:สร้าง|เขียน|ติดตั้ง|รัน)(?:ไฟล์|โค้ด|โปรเจกต์|โครงสร้าง)|(?:shall|should|want)\s+(?:me|i)\s+(?:to\s+)?(?:create|build|write|scaffold|generate|set\s+up)/i;
 const COWORK_PROMPT_LEAK_PATTERN =
   /Original requirement topic|Decision question|User answer|Continue \/ask|Continue \/plan|Cowork draft|Required JSON schema|quality contract|strict JSON/i;
 const COWORK_PLANNER_RESPONSE_SCHEMA =
@@ -365,7 +367,7 @@ function sanitizeCoworkDraft(value = {}) {
     intent: value.intent === 'ask' ? 'ask' : 'plan',
     goal: sanitizeCoworkText(value.goal),
     languageHint: getCoworkLanguageHint(value.languageHint),
-    avoidQuestions: sanitizeCoworkList(value.avoidQuestions, 360).slice(-8),
+    avoidQuestions: sanitizeCoworkList(value.avoidQuestions, 360).slice(-12),
     scope: sanitizeCoworkList(value.scope),
     exclusions: sanitizeCoworkList(value.exclusions),
     steps: sanitizeCoworkSteps(value.steps),
@@ -427,6 +429,7 @@ function createCoworkPlannerPrompt(draft) {
     '- Do not invent repository facts, file names, APIs, routes, or implementation details that are not present in the draft. If details are missing, say they are unknown.',
     '- intent must echo the requested mode: "ask" for /ask and "plan" for /plan.',
     '- For /ask, responseMode must be "decision". Ask exactly one highest-impact requirement or implementation question. Do not produce a plan card, Codex prompt, or broad checklist.',
+    '- Questions must gather requirements or decisions only. Never ask for permission to create files, scaffold a project, generate code, or perform any action yourself. Cowork cannot act; it only plans.',
     '- For /ask, if the topic already has enough detail, ask whether to continue gathering details, narrow scope, or switch to /plan. Do not switch to plan by yourself.',
     '- For /plan, responseMode must be "plan" when enough information exists to make a useful scoped plan.',
     '- For /plan, responseMode may be "decision" only when one missing decision would materially change the plan and unsafe guessing would likely send implementation in the wrong direction.',
@@ -651,6 +654,10 @@ function getCoworkWordCount(value = '') {
   return text ? text.split(/\s+/).filter(Boolean).length : 0;
 }
 
+function getCoworkThaiCharCount(value = '') {
+  return (String(value).match(/[฀-๿]/g) || []).length;
+}
+
 function hasCoworkSpecificAnchor(value = '') {
   return COWORK_SPECIFIC_ANCHOR_PATTERN.test(String(value));
 }
@@ -663,7 +670,8 @@ function isLowInformationCoworkItem(value = '') {
 
   const isGeneric = COWORK_GENERIC_PLAN_PATTERN.test(text);
   const hasSpecificAnchor = hasCoworkSpecificAnchor(text);
-  const hasEnoughShape = getCoworkWordCount(text) >= 4 || /[.:;()]/.test(text);
+  const hasEnoughShape =
+    getCoworkWordCount(text) >= 4 || getCoworkThaiCharCount(text) >= 12 || /[.:;()]/.test(text);
   return (isGeneric && !hasSpecificAnchor) || (!hasSpecificAnchor && !hasEnoughShape);
 }
 
@@ -870,6 +878,9 @@ function validateCoworkPlannerDecisionQuality(planner, draft = {}) {
   if (COWORK_PROMPT_LEAK_PATTERN.test(decision.question)) {
     blocking.push('decision question includes internal prompt text');
   }
+  if (COWORK_ACTION_OFFER_PATTERN.test(decision.question)) {
+    blocking.push('decision question must not offer to create files or code; Cowork only plans');
+  }
   if (isLowInformationCoworkItem(decision.reason)) {
     blocking.push('decision reason does not explain why guessing is unsafe');
   }
@@ -946,8 +957,8 @@ function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
           options: [
             {
               id: 'workflow',
-              label: 'Workflow หน้างาน',
-              description: 'เริ่มจากลำดับการใช้งานจริงของลูกค้า พนักงาน ครัว หรือแอดมิน.',
+              label: 'Workflow การใช้งาน',
+              description: 'เริ่มจากลำดับการใช้งานจริงตั้งแต่ต้นจนจบ ของผู้ใช้แต่ละบทบาทในระบบ.',
             },
             {
               id: 'data-admin',
@@ -970,18 +981,18 @@ function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
           options: [
             {
               id: 'staff',
-              label: 'พนักงานหน้างาน',
-              description: 'เน้น flow รับออเดอร์ ทำงานเร็ว และลดความผิดพลาดระหว่างวัน.',
+              label: 'ผู้ปฏิบัติงานภายใน',
+              description: 'เน้นขั้นตอนทำงานประจำวันให้เร็ว ลดความผิดพลาด และเห็นงานค้างชัดเจน.',
             },
             {
               id: 'owner',
               label: 'เจ้าของหรือแอดมิน',
-              description: 'เน้นตั้งค่า ดูรายงาน จัดการข้อมูล และติดตามภาพรวมธุรกิจ.',
+              description: 'เน้นตั้งค่า ดูรายงาน จัดการข้อมูล และติดตามภาพรวมของระบบ.',
             },
             {
               id: 'customer',
-              label: 'ลูกค้า',
-              description: 'เน้นประสบการณ์สั่งซื้อ จอง ชำระเงิน หรือดูสถานะด้วยตัวเอง.',
+              label: 'ผู้ใช้ปลายทาง',
+              description: 'เน้นประสบการณ์ใช้งานด้วยตัวเอง เช่น สมัคร ทำรายการ หรือติดตามสถานะ.',
             },
           ],
           allowCustomAnswer: true,
@@ -990,22 +1001,22 @@ function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
           question: 'ข้อมูลวันแรกต้องเก็บอะไรบ้าง?',
           reason: `หัวข้อ: ${goal}`,
           impact: 'ข้อมูลตั้งต้นจะกำหนด schema, หน้ากรอกข้อมูล, รายงาน, และงานที่ทำได้ใน MVP.',
-          recommendedOptionId: 'orders',
+          recommendedOptionId: 'transactions',
           options: [
             {
-              id: 'orders',
-              label: 'ออเดอร์และสถานะ',
-              description: 'เก็บรายการสั่งซื้อ สถานะ เวลา และผู้รับผิดชอบก่อน.',
+              id: 'transactions',
+              label: 'ธุรกรรมหลักและสถานะ',
+              description: 'เก็บรายการงานหรือธุรกรรมหลักของระบบ พร้อมสถานะ เวลา และผู้เกี่ยวข้องก่อน.',
             },
             {
               id: 'catalog',
-              label: 'สินค้าและราคา',
-              description: 'เก็บเมนู สินค้า ราคา หมวดหมู่ และตัวเลือกเสริมก่อน.',
+              label: 'ข้อมูลตั้งต้นของระบบ',
+              description: 'เก็บข้อมูลหลักที่ระบบต้องมีก่อนใช้งาน เช่น รายการสินค้า บริการ หรือเนื้อหา พร้อมหมวดหมู่.',
             },
             {
               id: 'reports',
-              label: 'ยอดขายและรายงาน',
-              description: 'เก็บข้อมูลที่ต้องใช้สรุปยอด รายวัน รายเดือน หรือสต๊อกก่อน.',
+              label: 'ข้อมูลสรุปและรายงาน',
+              description: 'เก็บข้อมูลที่ต้องใช้สรุปผลรายวัน รายเดือน หรือสถิติการใช้งานก่อน.',
             },
           ],
           allowCustomAnswer: true,
@@ -1027,9 +1038,9 @@ function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
               description: 'ทำเฉพาะรายงานจำเป็น ยังไม่ทำ analytics ลึกหรือ dashboard ซับซ้อน.',
             },
             {
-              id: 'multi-branch',
-              label: 'ตัดหลายสาขา',
-              description: 'เริ่มจากร้านเดียวหรือ flow เดียวก่อน แล้วค่อยขยายหลายสาขา.',
+              id: 'multi-unit',
+              label: 'ตัดการขยายหลายหน่วย',
+              description: 'เริ่มจากหน่วยเดียว flow เดียว หรือกลุ่มผู้ใช้เดียวก่อน แล้วค่อยขยาย.',
             },
           ],
           allowCustomAnswer: true,
@@ -1088,22 +1099,22 @@ function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
           question: 'What data must be stored on day one?',
           reason: `Topic: ${goal}`,
           impact: 'Day-one data drives schema, input screens, reports, and MVP behavior.',
-          recommendedOptionId: 'orders',
+          recommendedOptionId: 'transactions',
           options: [
             {
-              id: 'orders',
-              label: 'Orders and status',
-              description: 'Store orders, status, timestamps, and owner first.',
+              id: 'transactions',
+              label: 'Core transactions and status',
+              description: 'Store the main records or transactions with status, timestamps, and owner first.',
             },
             {
               id: 'catalog',
-              label: 'Catalog and pricing',
-              description: 'Store products, menus, prices, categories, and modifiers first.',
+              label: 'Base system data',
+              description: 'Store the core data the system needs before use, such as items, services, or content with categories.',
             },
             {
               id: 'reports',
-              label: 'Sales and reports',
-              description: 'Store the data needed for daily, monthly, or inventory summaries first.',
+              label: 'Summaries and reports',
+              description: 'Store the data needed for daily, monthly, or usage summaries first.',
             },
           ],
           allowCustomAnswer: true,
@@ -1125,9 +1136,9 @@ function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
               description: 'Keep only essential reports and skip deep analytics first.',
             },
             {
-              id: 'multi-branch',
-              label: 'Multi-branch support',
-              description: 'Start with one shop or one workflow before expanding branches.',
+              id: 'multi-unit',
+              label: 'Multi-unit expansion',
+              description: 'Start with one unit, one workflow, or one user group before expanding.',
             },
           ],
           allowCustomAnswer: true,
@@ -1136,8 +1147,52 @@ function createFallbackCoworkDecision(goal, isThai, avoidQuestions = []) {
 
   return (
     fallbackDecisions.find((decision) => !isRepeatedCoworkQuestion(decision.question, avoidQuestions)) ??
-    fallbackDecisions[fallbackDecisions.length - 1]
+    createExhaustedCoworkDecision(goal, isThai)
   );
+}
+
+function createExhaustedCoworkDecision(goal, isThai) {
+  if (isThai) {
+    return {
+      question: 'ข้อมูลที่เก็บมาพอสำหรับเริ่มทำแผนแล้ว จะไปต่อแบบไหน?',
+      reason: `หัวข้อ: ${goal}`,
+      impact: 'คำตอบนี้กำหนดว่าจะสรุปแผนจากคำตอบที่มีอยู่ หรือเก็บรายละเอียดเพิ่มก่อนทำแผน.',
+      recommendedOptionId: 'start-plan',
+      options: [
+        {
+          id: 'start-plan',
+          label: 'เริ่มทำแผนเลย',
+          description: 'กดปุ่ม "เริ่มทำแผนเลย" ใต้การ์ดนี้ หรือพิมพ์ /plan เพื่อสรุปแผนจากคำตอบทั้งหมด.',
+        },
+        {
+          id: 'add-detail',
+          label: 'เพิ่มรายละเอียดเอง',
+          description: 'พิมพ์ขอบเขต ข้อจำกัด หรือรายละเอียดที่ยังไม่ได้บอก ลงในช่องคำตอบของการ์ดนี้.',
+        },
+      ],
+      allowCustomAnswer: true,
+    };
+  }
+
+  return {
+    question: 'Enough requirements are collected to draft a plan. How do you want to continue?',
+    reason: `Topic: ${goal}`,
+    impact: 'This decides whether Cowork drafts the plan from collected answers or gathers more detail first.',
+    recommendedOptionId: 'start-plan',
+    options: [
+      {
+        id: 'start-plan',
+        label: 'Start the plan now',
+        description: 'Press the "Start the plan now" button under this card, or type /plan to draft the plan.',
+      },
+      {
+        id: 'add-detail',
+        label: 'Add more detail',
+        description: 'Type any missing scope, constraints, or requirements into the custom answer box.',
+      },
+    ],
+    allowCustomAnswer: true,
+  };
 }
 function createFallbackCoworkPlanner(draft = {}) {
   const goal = extractCoworkDisplayGoal(draft.goal || 'Cowork task');
@@ -3045,3 +3100,14 @@ router.post('/restore-checkpoint', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.coworkInternals = {
+  createExhaustedCoworkDecision,
+  createFallbackCoworkDecision,
+  getCoworkThaiCharCount,
+  getCoworkWordCount,
+  hasCoworkSpecificAnchor,
+  isLowInformationCoworkItem,
+  isOverloadedCoworkDecisionQuestion,
+  isRepeatedCoworkQuestion,
+  COWORK_ACTION_OFFER_PATTERN,
+};

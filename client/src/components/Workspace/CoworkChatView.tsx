@@ -253,7 +253,7 @@ function getCoworkDecisionQuestions(messages: CoworkMessage[], excludeMessageId 
     .filter((message) => message.id !== excludeMessageId)
     .map((message) => message.plannerResult?.decision?.question?.trim() || "")
     .filter(Boolean)
-    .slice(-8);
+    .slice(-12);
 }
 
 function getCoworkAnsweredRequirements(
@@ -267,7 +267,7 @@ function getCoworkAnsweredRequirements(
         message.plannerResult?.decision != null &&
         message.decisionAnswer != null,
     )
-    .slice(-8)
+    .slice(-12)
     .flatMap((message) => {
       const decisionAnswer = message.decisionAnswer!;
       return languageHint === "th"
@@ -1390,7 +1390,7 @@ export default function CoworkChatView() {
       ...(languageHint === "th"
         ? [`คำถามที่ตอบแล้ว: ${decision.question}`, `คำตอบผู้ใช้: ${answer}`]
         : [`Answered question: ${decision.question}`, `User answer: ${answer}`]),
-    ].slice(-16);
+    ].slice(-24);
 
     answerDecisionMessage(activeRoom.id, message.id, {
       question: decision.question,
